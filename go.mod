@@ -1,8 +1,11 @@
-module github.com/queueflow/queueflow-go
+module github.com/queue-flow/sdk-go
 
-go 1.21
+go 1.18
+
+require github.com/stretchr/testify v1.11.1
 
 require (
-	// No external dependencies for the core SDK
-	// Additional dependencies can be added for optional features
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -1,0 +1,2590 @@
+openapi: 3.1.0
+info:
+  contact:
+    name: QueueFlow
+    url: https://queueflow.dev
+  description: "REST API for QueueFlow, a PostgreSQL-native distributed job queue\
+    \ and workflow engine."
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  title: QueueFlow API
+  version: 1.0.0
+servers:
+- description: Local development
+  url: http://localhost:8000
+- description: Production
+  url: https://api.queueflow.dev
+tags:
+- description: Liveness and readiness probes
+  name: health
+- description: Job lifecycle
+  name: jobs
+- description: Workflow orchestration (DAG of steps)
+  name: workflows
+- description: Recurring enqueues on a cron schedule (UTC)
+  name: cron
+- description: "Dead-letter queue: inspect terminally-failed jobs and replay them\
+    \ as fresh jobs"
+  name: dlq
+- description: "Remote worker protocol: lease jobs, heartbeat, report completion/failure.\
+    \ Lets handlers run in any language, outside the server binary."
+  name: worker
+- description: Introspection and metrics
+  name: system
+paths:
+  /api/v1/cron:
+    get:
+      operationId: listCrons
+      parameters:
+      - description: "Filter by status (e.g. `pending`, `completed`)."
+        explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Filter by queue name (jobs only).
+        explode: true
+        in: query
+        name: queue
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Page size, 1..=100 (default 50)."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: Number of records to skip (default 0).
+        explode: true
+        in: query
+        name: offset
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: '`created_at ASC` or `created_at DESC` (default DESC).'
+        explode: true
+        in: query
+        name: order_by
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Include the exact `total` count in the response (default false; the
+          count is an extra full scan over the filtered set).
+        explode: true
+        in: query
+        name: include_total
+        required: false
+        schema:
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCronsResponse'
+          description: Page of cron schedules (`status`/`queue` filters do not apply)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+    post:
+      operationId: createCron
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCronRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCronResponse'
+          description: Schedule created; first firing is the next occurrence (UTC)
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid request (e.g. a bad cron expression)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: A schedule with this name already exists
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+  /api/v1/cron/{id}:
+    delete:
+      operationId: deleteCron
+      parameters:
+      - description: Cron schedule id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Deleted; already-enqueued jobs are unaffected
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+    get:
+      operationId: getCron
+      parameters:
+      - description: Cron schedule id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronSchedule'
+          description: Cron schedule
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+  /api/v1/cron/{id}/pause:
+    post:
+      operationId: pauseCron
+      parameters:
+      - description: Cron schedule id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: "Paused: no further firings until resumed"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+  /api/v1/cron/{id}/resume:
+    post:
+      operationId: resumeCron
+      parameters:
+      - description: Cron schedule id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: "Resumed: fires at its next future occurrence (missed runs\
+            \ are not caught up)"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - cron
+  /api/v1/dlq:
+    get:
+      operationId: listDeadLetters
+      parameters:
+      - description: "Filter by status (e.g. `pending`, `completed`)."
+        explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Filter by queue name (jobs only).
+        explode: true
+        in: query
+        name: queue
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Page size, 1..=100 (default 50)."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: Number of records to skip (default 0).
+        explode: true
+        in: query
+        name: offset
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: '`created_at ASC` or `created_at DESC` (default DESC).'
+        explode: true
+        in: query
+        name: order_by
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Include the exact `total` count in the response (default false; the
+          count is an extra full scan over the filtered set).
+        explode: true
+        in: query
+        name: include_total
+        required: false
+        schema:
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDeadLettersResponse'
+          description: "Page of dead letters, newest first (the `status` filter does\
+            \ not apply)"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - dlq
+  /api/v1/dlq/{id}:
+    get:
+      operationId: getDeadLetter
+      parameters:
+      - description: Dead letter id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: int64
+          type: integer
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeadLetter'
+          description: Dead letter
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - dlq
+  /api/v1/dlq/{id}/replay:
+    post:
+      operationId: replayDeadLetter
+      parameters:
+      - description: Dead letter id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: int64
+          type: integer
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayDeadLetterResponse'
+          description: A fresh job was created from the dead-lettered one (same task/payload/queue/config;
+            workflow linkage is not resurrected)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: "Not found (the entry, or its original job after retention)"
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Already replayed
+      security:
+      - bearerAuth: []
+      tags:
+      - dlq
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      parameters:
+      - description: "Filter by status (e.g. `pending`, `completed`)."
+        explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Filter by queue name (jobs only).
+        explode: true
+        in: query
+        name: queue
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Page size, 1..=100 (default 50)."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: Number of records to skip (default 0).
+        explode: true
+        in: query
+        name: offset
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: '`created_at ASC` or `created_at DESC` (default DESC).'
+        explode: true
+        in: query
+        name: order_by
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Include the exact `total` count in the response (default false; the
+          count is an extra full scan over the filtered set).
+        explode: true
+        in: query
+        name: include_total
+        required: false
+        schema:
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListJobsResponse'
+          description: Page of jobs
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+    post:
+      operationId: createJob
+      parameters:
+      - description: "Optional client-supplied key making this create idempotent per\
+          \ tenant: retrying with the same key returns the original job instead of\
+          \ creating a duplicate."
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          nullable: true
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateJobResponse'
+          description: Job created (or replayed idempotently)
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+  /api/v1/jobs/batch:
+    post:
+      operationId: createBatchJobs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBatchJobsRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateBatchJobsResponse'
+          description: Jobs created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+  /api/v1/jobs/{id}:
+    get:
+      operationId: getJob
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: Job
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+  /api/v1/jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Cancelled
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+  /api/v1/jobs/{id}/complete:
+    post:
+      operationId: completeJob
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteJobRequest'
+        required: true
+      responses:
+        "204":
+          description: "Completed (idempotent: replaying against an already-finished\
+            \ job also succeeds)"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: "Authenticated, but not with the worker credential"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Lease no longer held (expired and reclaimed)
+      security:
+      - bearerAuth: []
+      tags:
+      - worker
+  /api/v1/jobs/{id}/events:
+    get:
+      operationId: streamJobEvents
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: SSE stream; each `status` event carries the full job JSON.
+            Closes after the job reaches a terminal state.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      summary: |-
+        Stream a job's status transitions as Server-Sent Events until it reaches a
+        terminal state. Lets clients await completion without polling the REST
+        endpoint themselves.
+      tags:
+      - jobs
+  /api/v1/jobs/{id}/fail:
+    post:
+      operationId: failJob
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailJobRequest'
+        required: true
+      responses:
+        "204":
+          description: Failure recorded; the job is retried or dead-lettered per its
+            config
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: "Authenticated, but not with the worker credential"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Lease no longer held (expired and reclaimed)
+      security:
+      - bearerAuth: []
+      tags:
+      - worker
+  /api/v1/jobs/{id}/heartbeat:
+    post:
+      operationId: heartbeatJob
+      parameters:
+      - description: Job id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeartbeatRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+          description: "Current job status. `running` = lease extended; anything else\
+            \ (e.g. `cancelled`) = not extended, stop working on the job."
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: "Authenticated, but not with the worker credential"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Lease no longer held (expired and reclaimed)
+      security:
+      - bearerAuth: []
+      tags:
+      - worker
+  /api/v1/queues/{queue}/lease:
+    post:
+      operationId: leaseJobs
+      parameters:
+      - description: Queue to lease from
+        explode: false
+        in: path
+        name: queue
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaseJobsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaseJobsResponse'
+          description: Zero or more leased jobs (empty if none became available within
+            wait_secs)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: "Authenticated, but not with the worker credential"
+      security:
+      - bearerAuth: []
+      tags:
+      - worker
+  /api/v1/stats:
+    get:
+      operationId: getStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsSnapshot'
+          description: "Engine counters. Process-local and reset on restart: in a\
+            \ split api/worker deployment this reflects only the process serving the\
+            \ request; query the database for fleet-wide history."
+      security:
+      - bearerAuth: []
+      tags:
+      - system
+  /api/v1/tasks:
+    get:
+      operationId: listTasks
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TasksResponse'
+          description: Registered task handlers
+      security:
+      - bearerAuth: []
+      tags:
+      - system
+  /api/v1/workflows:
+    get:
+      operationId: listWorkflows
+      parameters:
+      - description: "Filter by status (e.g. `pending`, `completed`)."
+        explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Filter by queue name (jobs only).
+        explode: true
+        in: query
+        name: queue
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Page size, 1..=100 (default 50)."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: Number of records to skip (default 0).
+        explode: true
+        in: query
+        name: offset
+        required: false
+        schema:
+          format: int64
+          type: integer
+        style: form
+      - description: '`created_at ASC` or `created_at DESC` (default DESC).'
+        explode: true
+        in: query
+        name: order_by
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Include the exact `total` count in the response (default false; the
+          count is an extra full scan over the filtered set).
+        explode: true
+        in: query
+        name: include_total
+        required: false
+        schema:
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowsResponse'
+          description: Page of workflows
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
+    post:
+      operationId: createWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkflowResponse'
+          description: Workflow created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid workflow (e.g. dependency cycle)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
+  /api/v1/workflows/{id}:
+    get:
+      operationId: getWorkflow
+      parameters:
+      - description: Workflow id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+          description: Workflow
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
+  /api/v1/workflows/{id}/cancel:
+    post:
+      operationId: cancelWorkflow
+      parameters:
+      - description: Workflow id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Cancelled
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
+  /api/v1/workflows/{id}/diagram:
+    get:
+      operationId: getWorkflowDiagram
+      parameters:
+      - description: Workflow id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDiagramResponse'
+          description: Mermaid diagram of the workflow DAG
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+          description: Healthy
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Database unavailable
+      tags:
+      - health
+  /ready:
+    get:
+      operationId: getReady
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyStatus'
+          description: Ready
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not ready
+      tags:
+      - health
+components:
+  schemas:
+    BackoffStrategy:
+      description: How retry delays grow between attempts.
+      enum:
+      - fixed
+      - linear
+      - exponential
+      type: string
+    CompleteJobRequest:
+      description: "Body for `POST /api/v1/jobs/{id}/complete`."
+      example:
+        result:
+          key: ""
+        lease_token: lease_token
+      properties:
+        lease_token:
+          description: The lease token returned by the lease call.
+          type: string
+        result:
+          additionalProperties: {}
+          description: "Handler result, recorded on the job and merged into workflow\
+            \ context."
+      required:
+      - lease_token
+    CreateBatchJobsRequest:
+      example:
+        jobs:
+        - task_name: task_name
+          payload:
+            key: ""
+          run_at: 2000-01-23T04:56:07.000+00:00
+          config:
+            max_retries: 0
+            priority: 6
+            queue: queue
+            timeout: 0
+        - task_name: task_name
+          payload:
+            key: ""
+          run_at: 2000-01-23T04:56:07.000+00:00
+          config:
+            max_retries: 0
+            priority: 6
+            queue: queue
+            timeout: 0
+      properties:
+        jobs:
+          items:
+            $ref: '#/components/schemas/CreateJobRequest'
+          type: array
+      required:
+      - jobs
+    CreateBatchJobsResponse:
+      example:
+        job_ids:
+        - job_ids
+        - job_ids
+        count: 0
+      properties:
+        count:
+          minimum: 0
+          type: integer
+        job_ids:
+          items:
+            type: string
+          type: array
+      required:
+      - count
+      - job_ids
+    CreateCronRequest:
+      description: Request body for creating a cron schedule.
+      example:
+        task_name: task_name
+        payload:
+          key: ""
+        cron_expr: cron_expr
+        name: name
+        config:
+          max_retries: 0
+          retry_max_delay_secs: 0
+          retry_backoff: fixed
+          priority: 1
+          retry_delay_secs: 0
+          jitter_factor: 0.8008281904610115
+          timeout_secs: 0
+        queue: queue
+      properties:
+        config:
+          $ref: '#/components/schemas/JobConfig'
+        cron_expr:
+          description: 5-field crontab (UTC); 6/7 fields with leading seconds also
+            accepted.
+          type: string
+        name:
+          description: Unique per tenant.
+          type: string
+        payload:
+          additionalProperties: {}
+        queue:
+          nullable: true
+          type: string
+        task_name:
+          type: string
+      required:
+      - cron_expr
+      - name
+      - task_name
+    CreateCronResponse:
+      example:
+        cron_id: cron_id
+      properties:
+        cron_id:
+          type: string
+      required:
+      - cron_id
+    CreateJobRequest:
+      example:
+        task_name: task_name
+        payload:
+          key: ""
+        run_at: 2000-01-23T04:56:07.000+00:00
+        config:
+          max_retries: 0
+          priority: 6
+          queue: queue
+          timeout: 0
+      properties:
+        config:
+          $ref: '#/components/schemas/JobConfigRequest'
+        payload:
+          additionalProperties: {}
+          description: Arbitrary JSON object passed to the handler.
+        run_at:
+          description: |-
+            Don't run before this instant (RFC 3339). The job is created
+            immediately but stays invisible to workers until then.
+          format: date-time
+          nullable: true
+          type: string
+        task_name:
+          description: The registered task handler to invoke.
+          type: string
+      required:
+      - task_name
+    CreateJobResponse:
+      example:
+        job_id: job_id
+      properties:
+        job_id:
+          type: string
+      required:
+      - job_id
+    CreateWorkflowRequest:
+      description: |-
+        Request body for creating a workflow. Shared by the builder DSL and the API
+        so callers and SDKs use the same contract.
+      example:
+        metadata:
+          key: ""
+        context:
+          key: ""
+        name: name
+        steps:
+        - task_name: task_name
+          on_failure: halt
+          metadata:
+            key: ""
+          depends_on:
+          - depends_on
+          - depends_on
+          payload:
+            key: ""
+          on_success: continue
+          name: name
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+        - task_name: task_name
+          on_failure: halt
+          metadata:
+            key: ""
+          depends_on:
+          - depends_on
+          - depends_on
+          payload:
+            key: ""
+          on_success: continue
+          name: name
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+      properties:
+        context:
+          additionalProperties: {}
+        metadata:
+          additionalProperties: {}
+        name:
+          type: string
+        steps:
+          items:
+            $ref: '#/components/schemas/WorkflowStep'
+          type: array
+      required:
+      - name
+      - steps
+    CreateWorkflowResponse:
+      example:
+        workflow_id: workflow_id
+      properties:
+        workflow_id:
+          type: string
+      required:
+      - workflow_id
+    CronSchedule:
+      description: |-
+        A recurring enqueue schedule. Expressions are standard 5-field crontab
+        (`minute hour day-of-month month day-of-week`), evaluated in **UTC**; a
+        6/7-field form with leading seconds is also accepted.
+      example:
+        queue_name: queue_name
+        task_name: task_name
+        tenant_id: tenant_id
+        next_run_at: 2000-01-23T04:56:07.000+00:00
+        payload:
+          key: ""
+        cron_expr: cron_expr
+        last_enqueued_at: 2000-01-23T04:56:07.000+00:00
+        name: name
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: id
+        config:
+          max_retries: 0
+          retry_max_delay_secs: 0
+          retry_backoff: fixed
+          priority: 1
+          retry_delay_secs: 0
+          jitter_factor: 0.8008281904610115
+          timeout_secs: 0
+        enabled: true
+      properties:
+        config:
+          $ref: '#/components/schemas/JobConfig'
+        created_at:
+          format: date-time
+          type: string
+        cron_expr:
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: string
+        last_enqueued_at:
+          format: date-time
+          nullable: true
+          type: string
+        name:
+          description: Unique per tenant.
+          type: string
+        next_run_at:
+          description: |-
+            The next instant this schedule fires. Missed occurrences (server
+            down) collapse into at most one catch-up firing.
+          format: date-time
+          type: string
+        payload:
+          additionalProperties: {}
+        queue_name:
+          description: Queue for the enqueued jobs (the engine default when absent).
+          nullable: true
+          type: string
+        task_name:
+          type: string
+        tenant_id:
+          nullable: true
+          type: string
+      required:
+      - created_at
+      - cron_expr
+      - enabled
+      - id
+      - name
+      - next_run_at
+      - task_name
+    DeadLetter:
+      description: |-
+        A dead-lettered job: a terminal failure recorded for inspection and
+        replay. The original job row remains (subject to retention); this entry
+        captures why it died and, once replayed, which fresh job took its place.
+      example:
+        error_message: error_message
+        queue_name: queue_name
+        task_name: task_name
+        tenant_id: tenant_id
+        reason: reason
+        replay_job_id: replay_job_id
+        job_id: job_id
+        created_at: 2000-01-23T04:56:07.000+00:00
+        replayed_at: 2000-01-23T04:56:07.000+00:00
+        id: 0
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        error_message:
+          nullable: true
+          type: string
+        id:
+          format: int64
+          type: integer
+        job_id:
+          type: string
+        queue_name:
+          nullable: true
+          type: string
+        reason:
+          description: |-
+            Why the job dead-lettered: `max_attempts_exceeded`, `non_retryable`,
+            or `handler_not_found`.
+          type: string
+        replay_job_id:
+          description: The fresh job created by the replay.
+          nullable: true
+          type: string
+        replayed_at:
+          description: |-
+            Set once this entry has been replayed; a dead letter replays at most
+            once.
+          format: date-time
+          nullable: true
+          type: string
+        task_name:
+          nullable: true
+          type: string
+        tenant_id:
+          nullable: true
+          type: string
+      required:
+      - created_at
+      - id
+      - job_id
+      - reason
+    ErrorBody:
+      example:
+        error: error
+        timestamp: 2000-01-23T04:56:07.000+00:00
+      properties:
+        error:
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+      required:
+      - error
+      - timestamp
+    FailJobRequest:
+      description: "Body for `POST /api/v1/jobs/{id}/fail`."
+      example:
+        retryable: true
+        lease_token: lease_token
+        error: error
+      properties:
+        error:
+          description: Human-readable failure reason.
+          type: string
+        lease_token:
+          description: The lease token returned by the lease call.
+          type: string
+        retryable:
+          description: |-
+            Whether the engine may retry (subject to the job's max_retries).
+            Defaults to true; send false for permanent failures (e.g. bad input).
+          type: boolean
+      required:
+      - error
+      - lease_token
+    HealthStatus:
+      example:
+        version: version
+        status: status
+        timestamp: 2000-01-23T04:56:07.000+00:00
+      properties:
+        status:
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+        version:
+          type: string
+      required:
+      - status
+      - timestamp
+      - version
+    HeartbeatRequest:
+      description: "Body for `POST /api/v1/jobs/{id}/heartbeat`."
+      example:
+        extend_secs: 0
+        lease_token: lease_token
+      properties:
+        extend_secs:
+          description: "New lease duration in seconds, measured from now (1..=3600)."
+          format: int32
+          minimum: 0
+          type: integer
+        lease_token:
+          description: The lease token returned by the lease call.
+          type: string
+      required:
+      - extend_secs
+      - lease_token
+    HeartbeatResponse:
+      description: "Response for `POST /api/v1/jobs/{id}/heartbeat`."
+      example:
+        status: pending
+      properties:
+        status:
+          $ref: '#/components/schemas/JobStatus'
+      required:
+      - status
+    Job:
+      description: A single unit of work.
+      example:
+        error_message: error_message
+        task_name: task_name
+        tenant_id: tenant_id
+        metadata:
+          key: ""
+        workflow_id: workflow_id
+        created_at: 2000-01-23T04:56:07.000+00:00
+        scheduled_at: 2000-01-23T04:56:07.000+00:00
+        delivery_count: 0
+        queue_name: queue_name
+        result:
+          key: ""
+        completed_at: 2000-01-23T04:56:07.000+00:00
+        payload:
+          key: ""
+        retry_count: 0
+        idempotency_key: idempotency_key
+        next_retry_at: 2000-01-23T04:56:07.000+00:00
+        started_at: 2000-01-23T04:56:07.000+00:00
+        id: id
+        workflow_step_id: workflow_step_id
+        config:
+          max_retries: 0
+          retry_max_delay_secs: 0
+          retry_backoff: fixed
+          priority: 1
+          retry_delay_secs: 0
+          jitter_factor: 0.8008281904610115
+          timeout_secs: 0
+        status: pending
+      properties:
+        completed_at:
+          format: date-time
+          nullable: true
+          type: string
+        config:
+          $ref: '#/components/schemas/JobConfig'
+        created_at:
+          format: date-time
+          type: string
+        delivery_count:
+          description: |-
+            How many times this job has been claimed (delivered to a worker).
+            Greater than `retry_count + 1` means a lease expired without a report —
+            i.e. a worker crashed mid-run.
+          format: int32
+          minimum: 0
+          type: integer
+        error_message:
+          nullable: true
+          type: string
+        id:
+          type: string
+        idempotency_key:
+          description: |-
+            Client-supplied key that makes job creation idempotent per tenant:
+            re-submitting the same key returns the original job instead of creating
+            a duplicate.
+          nullable: true
+          type: string
+        metadata:
+          additionalProperties: {}
+        next_retry_at:
+          description: |-
+            When this job's next retry becomes claimable (mirrors `scheduled_at`
+            while the job is `retrying`; kept for audit/inspection).
+          format: date-time
+          nullable: true
+          type: string
+        payload:
+          additionalProperties: {}
+        queue_name:
+          type: string
+        result:
+          additionalProperties: {}
+        retry_count:
+          format: int32
+          minimum: 0
+          type: integer
+        scheduled_at:
+          description: |-
+            When the job becomes claimable. `created_at` for immediate jobs, the
+            requested `run_at` for scheduled jobs, and the next backoff instant
+            while retrying — the durable delay lives in the row itself.
+          format: date-time
+          type: string
+        started_at:
+          format: date-time
+          nullable: true
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        task_name:
+          type: string
+        tenant_id:
+          nullable: true
+          type: string
+        workflow_id:
+          nullable: true
+          type: string
+        workflow_step_id:
+          description: The owning workflow step's name (steps are addressed by name).
+          nullable: true
+          type: string
+      required:
+      - config
+      - created_at
+      - id
+      - queue_name
+      - retry_count
+      - scheduled_at
+      - status
+      - task_name
+    JobConfig:
+      description: Per-job execution configuration. All durations are in seconds.
+      example:
+        max_retries: 0
+        retry_max_delay_secs: 0
+        retry_backoff: fixed
+        priority: 1
+        retry_delay_secs: 0
+        jitter_factor: 0.8008281904610115
+        timeout_secs: 0
+      properties:
+        jitter_factor:
+          description: |-
+            Optional jitter in `0.0..=1.0`. `0.1` => +/-10% randomization of each
+            retry delay, which spreads out thundering-herd retries.
+          format: double
+          nullable: true
+          type: number
+        max_retries:
+          format: int32
+          minimum: 0
+          type: integer
+        priority:
+          description: |-
+            Higher is claimed first within a queue; ties break on `scheduled_at`,
+            then `created_at`.
+          format: int32
+          type: integer
+        retry_backoff:
+          $ref: '#/components/schemas/BackoffStrategy'
+        retry_delay_secs:
+          format: int64
+          minimum: 0
+          type: integer
+        retry_max_delay_secs:
+          format: int64
+          minimum: 0
+          type: integer
+        timeout_secs:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - max_retries
+      - priority
+      - retry_delay_secs
+      - retry_max_delay_secs
+      - timeout_secs
+    JobConfigRequest:
+      description: Optional per-job configuration overrides.
+      example:
+        max_retries: 0
+        priority: 6
+        queue: queue
+        timeout: 0
+      properties:
+        max_retries:
+          format: int32
+          minimum: 0
+          nullable: true
+          type: integer
+        priority:
+          description: "Higher is claimed first within a queue (ties: oldest first)."
+          format: int32
+          nullable: true
+          type: integer
+        queue:
+          description: Override the destination queue.
+          nullable: true
+          type: string
+        timeout:
+          description: "Per-attempt timeout, in seconds."
+          format: int64
+          minimum: 0
+          nullable: true
+          type: integer
+    JobStatus:
+      description: Lifecycle state of a single job.
+      enum:
+      - pending
+      - running
+      - completed
+      - failed
+      - retrying
+      - cancelled
+      type: string
+    LeaseJobsRequest:
+      description: "Body for `POST /api/v1/queues/{queue}/lease`."
+      example:
+        lease_secs: 0
+        wait_secs: 0
+        max_jobs: 0
+      properties:
+        lease_secs:
+          description: "Lease duration in seconds (1..=3600, default 30). Heartbeat\
+            \ to extend."
+          format: int32
+          minimum: 0
+          nullable: true
+          type: integer
+        max_jobs:
+          description: "Maximum jobs to lease in one call (1..=100, default 1)."
+          minimum: 0
+          nullable: true
+          type: integer
+        wait_secs:
+          description: "Long-poll wait when the queue is empty, in seconds (0..=30,\
+            \ default 0)."
+          format: int32
+          minimum: 0
+          nullable: true
+          type: integer
+    LeaseJobsResponse:
+      example:
+        jobs:
+        - lease_token: lease_token
+          job:
+            error_message: error_message
+            task_name: task_name
+            tenant_id: tenant_id
+            metadata:
+              key: ""
+            workflow_id: workflow_id
+            created_at: 2000-01-23T04:56:07.000+00:00
+            scheduled_at: 2000-01-23T04:56:07.000+00:00
+            delivery_count: 0
+            queue_name: queue_name
+            result:
+              key: ""
+            completed_at: 2000-01-23T04:56:07.000+00:00
+            payload:
+              key: ""
+            retry_count: 0
+            idempotency_key: idempotency_key
+            next_retry_at: 2000-01-23T04:56:07.000+00:00
+            started_at: 2000-01-23T04:56:07.000+00:00
+            id: id
+            workflow_step_id: workflow_step_id
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+            status: pending
+        - lease_token: lease_token
+          job:
+            error_message: error_message
+            task_name: task_name
+            tenant_id: tenant_id
+            metadata:
+              key: ""
+            workflow_id: workflow_id
+            created_at: 2000-01-23T04:56:07.000+00:00
+            scheduled_at: 2000-01-23T04:56:07.000+00:00
+            delivery_count: 0
+            queue_name: queue_name
+            result:
+              key: ""
+            completed_at: 2000-01-23T04:56:07.000+00:00
+            payload:
+              key: ""
+            retry_count: 0
+            idempotency_key: idempotency_key
+            next_retry_at: 2000-01-23T04:56:07.000+00:00
+            started_at: 2000-01-23T04:56:07.000+00:00
+            id: id
+            workflow_step_id: workflow_step_id
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+            status: pending
+      properties:
+        jobs:
+          items:
+            $ref: '#/components/schemas/LeasedJob'
+          type: array
+      required:
+      - jobs
+    LeasedJob:
+      description: |-
+        A job leased to a (possibly remote) worker, together with the lease token
+        needed to heartbeat, complete, or fail it.
+      example:
+        lease_token: lease_token
+        job:
+          error_message: error_message
+          task_name: task_name
+          tenant_id: tenant_id
+          metadata:
+            key: ""
+          workflow_id: workflow_id
+          created_at: 2000-01-23T04:56:07.000+00:00
+          scheduled_at: 2000-01-23T04:56:07.000+00:00
+          delivery_count: 0
+          queue_name: queue_name
+          result:
+            key: ""
+          completed_at: 2000-01-23T04:56:07.000+00:00
+          payload:
+            key: ""
+          retry_count: 0
+          idempotency_key: idempotency_key
+          next_retry_at: 2000-01-23T04:56:07.000+00:00
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          workflow_step_id: workflow_step_id
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+          status: pending
+      properties:
+        job:
+          $ref: '#/components/schemas/Job'
+        lease_token:
+          description: |-
+            Opaque, unguessable proof of lease ownership, regenerated on every
+            claim. Pass it back on heartbeat/complete/fail; a stale token (the
+            lease expired and the job was reclaimed) is rejected.
+          type: string
+      required:
+      - job
+      - lease_token
+    ListCronsResponse:
+      example:
+        total: 3
+        offset: 9
+        limit: 7
+        has_more: true
+        crons:
+        - queue_name: queue_name
+          task_name: task_name
+          tenant_id: tenant_id
+          next_run_at: 2000-01-23T04:56:07.000+00:00
+          payload:
+            key: ""
+          cron_expr: cron_expr
+          last_enqueued_at: 2000-01-23T04:56:07.000+00:00
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+          enabled: true
+        - queue_name: queue_name
+          task_name: task_name
+          tenant_id: tenant_id
+          next_run_at: 2000-01-23T04:56:07.000+00:00
+          payload:
+            key: ""
+          cron_expr: cron_expr
+          last_enqueued_at: 2000-01-23T04:56:07.000+00:00
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+          enabled: true
+      properties:
+        crons:
+          items:
+            $ref: '#/components/schemas/CronSchedule'
+          type: array
+        has_more:
+          type: boolean
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total:
+          description: Exact total match count; only present when `include_total=true`.
+          format: int64
+          nullable: true
+          type: integer
+      required:
+      - crons
+      - has_more
+      - limit
+      - offset
+    ListDeadLettersResponse:
+      example:
+        total: 5
+        dead_letters:
+        - error_message: error_message
+          queue_name: queue_name
+          task_name: task_name
+          tenant_id: tenant_id
+          reason: reason
+          replay_job_id: replay_job_id
+          job_id: job_id
+          created_at: 2000-01-23T04:56:07.000+00:00
+          replayed_at: 2000-01-23T04:56:07.000+00:00
+          id: 0
+        - error_message: error_message
+          queue_name: queue_name
+          task_name: task_name
+          tenant_id: tenant_id
+          reason: reason
+          replay_job_id: replay_job_id
+          job_id: job_id
+          created_at: 2000-01-23T04:56:07.000+00:00
+          replayed_at: 2000-01-23T04:56:07.000+00:00
+          id: 0
+        offset: 1
+        limit: 6
+        has_more: true
+      properties:
+        dead_letters:
+          items:
+            $ref: '#/components/schemas/DeadLetter'
+          type: array
+        has_more:
+          type: boolean
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total:
+          description: Exact total match count; only present when `include_total=true`.
+          format: int64
+          nullable: true
+          type: integer
+      required:
+      - dead_letters
+      - has_more
+      - limit
+      - offset
+    ListJobsResponse:
+      example:
+        total: 5
+        offset: 5
+        jobs:
+        - error_message: error_message
+          task_name: task_name
+          tenant_id: tenant_id
+          metadata:
+            key: ""
+          workflow_id: workflow_id
+          created_at: 2000-01-23T04:56:07.000+00:00
+          scheduled_at: 2000-01-23T04:56:07.000+00:00
+          delivery_count: 0
+          queue_name: queue_name
+          result:
+            key: ""
+          completed_at: 2000-01-23T04:56:07.000+00:00
+          payload:
+            key: ""
+          retry_count: 0
+          idempotency_key: idempotency_key
+          next_retry_at: 2000-01-23T04:56:07.000+00:00
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          workflow_step_id: workflow_step_id
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+          status: pending
+        - error_message: error_message
+          task_name: task_name
+          tenant_id: tenant_id
+          metadata:
+            key: ""
+          workflow_id: workflow_id
+          created_at: 2000-01-23T04:56:07.000+00:00
+          scheduled_at: 2000-01-23T04:56:07.000+00:00
+          delivery_count: 0
+          queue_name: queue_name
+          result:
+            key: ""
+          completed_at: 2000-01-23T04:56:07.000+00:00
+          payload:
+            key: ""
+          retry_count: 0
+          idempotency_key: idempotency_key
+          next_retry_at: 2000-01-23T04:56:07.000+00:00
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          workflow_step_id: workflow_step_id
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+          status: pending
+        limit: 1
+        has_more: true
+      properties:
+        has_more:
+          type: boolean
+        jobs:
+          items:
+            $ref: '#/components/schemas/Job'
+          type: array
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total:
+          description: |-
+            Exact total match count. Only present when the request set
+            `include_total=true`; computing it costs a full count over the filtered
+            set, so it is opt-in.
+          format: int64
+          nullable: true
+          type: integer
+      required:
+      - has_more
+      - jobs
+      - limit
+      - offset
+    ListWorkflowsResponse:
+      example:
+        total: 1
+        offset: 6
+        limit: 0
+        has_more: true
+        workflows:
+        - tenant_id: tenant_id
+          completed_at: 2000-01-23T04:56:07.000+00:00
+          metadata:
+            key: ""
+          context:
+            key: ""
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          steps:
+          - task_name: task_name
+            on_failure: halt
+            metadata:
+              key: ""
+            depends_on:
+            - depends_on
+            - depends_on
+            payload:
+              key: ""
+            on_success: continue
+            name: name
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+          - task_name: task_name
+            on_failure: halt
+            metadata:
+              key: ""
+            depends_on:
+            - depends_on
+            - depends_on
+            payload:
+              key: ""
+            on_success: continue
+            name: name
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+          status: created
+        - tenant_id: tenant_id
+          completed_at: 2000-01-23T04:56:07.000+00:00
+          metadata:
+            key: ""
+          context:
+            key: ""
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: id
+          steps:
+          - task_name: task_name
+            on_failure: halt
+            metadata:
+              key: ""
+            depends_on:
+            - depends_on
+            - depends_on
+            payload:
+              key: ""
+            on_success: continue
+            name: name
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+          - task_name: task_name
+            on_failure: halt
+            metadata:
+              key: ""
+            depends_on:
+            - depends_on
+            - depends_on
+            payload:
+              key: ""
+            on_success: continue
+            name: name
+            config:
+              max_retries: 0
+              retry_max_delay_secs: 0
+              retry_backoff: fixed
+              priority: 1
+              retry_delay_secs: 0
+              jitter_factor: 0.8008281904610115
+              timeout_secs: 0
+          status: created
+      properties:
+        has_more:
+          type: boolean
+        limit:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        total:
+          description: Exact total match count; only present when `include_total=true`.
+          format: int64
+          nullable: true
+          type: integer
+        workflows:
+          items:
+            $ref: '#/components/schemas/Workflow'
+          type: array
+      required:
+      - has_more
+      - limit
+      - offset
+      - workflows
+    OnFailure:
+      description: What to do with downstream steps when a step fails.
+      enum:
+      - halt
+      - skip
+      - continue
+      type: string
+    OnSuccess:
+      description: Reserved for future expansion; only `Continue` is meaningful today.
+      enum:
+      - continue
+      type: string
+    ReadyStatus:
+      example:
+        status: status
+      properties:
+        status:
+          type: string
+      required:
+      - status
+    ReplayDeadLetterResponse:
+      example:
+        job_id: job_id
+      properties:
+        job_id:
+          description: The fresh job created from the dead-lettered one.
+          type: string
+      required:
+      - job_id
+    StatsSnapshot:
+      description: "Plain snapshot of [`EngineStats`]."
+      example:
+        workflows_completed: 0
+        workflows_created: 0
+        jobs_retried: 0
+        jobs_completed: 0
+        jobs_dead_lettered: 0
+        workflows_failed: 0
+        jobs_failed: 0
+        jobs_created: 0
+      properties:
+        jobs_completed:
+          format: int64
+          minimum: 0
+          type: integer
+        jobs_created:
+          format: int64
+          minimum: 0
+          type: integer
+        jobs_dead_lettered:
+          format: int64
+          minimum: 0
+          type: integer
+        jobs_failed:
+          format: int64
+          minimum: 0
+          type: integer
+        jobs_retried:
+          format: int64
+          minimum: 0
+          type: integer
+        workflows_completed:
+          format: int64
+          minimum: 0
+          type: integer
+        workflows_created:
+          format: int64
+          minimum: 0
+          type: integer
+        workflows_failed:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - jobs_completed
+      - jobs_created
+      - jobs_dead_lettered
+      - jobs_failed
+      - jobs_retried
+      - workflows_completed
+      - workflows_created
+      - workflows_failed
+    TasksResponse:
+      example:
+        tasks:
+        - tasks
+        - tasks
+      properties:
+        tasks:
+          items:
+            type: string
+          type: array
+      required:
+      - tasks
+    Workflow:
+      description: A workflow instance and its steps.
+      example:
+        tenant_id: tenant_id
+        completed_at: 2000-01-23T04:56:07.000+00:00
+        metadata:
+          key: ""
+        context:
+          key: ""
+        name: name
+        created_at: 2000-01-23T04:56:07.000+00:00
+        started_at: 2000-01-23T04:56:07.000+00:00
+        id: id
+        steps:
+        - task_name: task_name
+          on_failure: halt
+          metadata:
+            key: ""
+          depends_on:
+          - depends_on
+          - depends_on
+          payload:
+            key: ""
+          on_success: continue
+          name: name
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+        - task_name: task_name
+          on_failure: halt
+          metadata:
+            key: ""
+          depends_on:
+          - depends_on
+          - depends_on
+          payload:
+            key: ""
+          on_success: continue
+          name: name
+          config:
+            max_retries: 0
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
+            timeout_secs: 0
+        status: created
+      properties:
+        completed_at:
+          format: date-time
+          nullable: true
+          type: string
+        context:
+          additionalProperties: {}
+          description: |-
+            Accumulated step results, keyed by step name. Passed to downstream steps
+            under the `_context` payload key.
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        metadata:
+          additionalProperties: {}
+        name:
+          type: string
+        started_at:
+          format: date-time
+          nullable: true
+          type: string
+        status:
+          $ref: '#/components/schemas/WorkflowStatus'
+        steps:
+          items:
+            $ref: '#/components/schemas/WorkflowStep'
+          type: array
+        tenant_id:
+          nullable: true
+          type: string
+      required:
+      - created_at
+      - id
+      - name
+      - status
+      - steps
+    WorkflowDiagramResponse:
+      example:
+        diagram: diagram
+        format: format
+      properties:
+        diagram:
+          description: The diagram document (Mermaid `graph TD`).
+          type: string
+        format:
+          description: Diagram source format. Always `mermaid` today.
+          type: string
+      required:
+      - diagram
+      - format
+    WorkflowStatus:
+      description: Lifecycle state of a workflow instance.
+      enum:
+      - created
+      - running
+      - completed
+      - failed
+      - partially_failed
+      - cancelled
+      type: string
+    WorkflowStep:
+      description: |-
+        A node in a workflow DAG. Steps are addressed by their unique `name`;
+        `depends_on` lists the names of steps that must complete first.
+      example:
+        task_name: task_name
+        on_failure: halt
+        metadata:
+          key: ""
+        depends_on:
+        - depends_on
+        - depends_on
+        payload:
+          key: ""
+        on_success: continue
+        name: name
+        config:
+          max_retries: 0
+          retry_max_delay_secs: 0
+          retry_backoff: fixed
+          priority: 1
+          retry_delay_secs: 0
+          jitter_factor: 0.8008281904610115
+          timeout_secs: 0
+      properties:
+        config:
+          $ref: '#/components/schemas/JobConfig'
+        depends_on:
+          items:
+            type: string
+          type: array
+        metadata:
+          additionalProperties: {}
+        name:
+          type: string
+        on_failure:
+          $ref: '#/components/schemas/OnFailure'
+        on_success:
+          $ref: '#/components/schemas/OnSuccess'
+        payload:
+          additionalProperties: {}
+        task_name:
+          type: string
+      required:
+      - name
+      - task_name
+  securitySchemes:
+    bearerAuth:
+      bearerFormat: API Key
+      scheme: bearer
+      type: http
