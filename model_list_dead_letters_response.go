@@ -24,6 +24,8 @@ type ListDeadLettersResponse struct {
 	DeadLetters []DeadLetter `json:"dead_letters"`
 	HasMore bool `json:"has_more"`
 	Limit int64 `json:"limit"`
+	// Opaque keyset cursor for the next page (present when `has_more`). Pass it back as `cursor` to continue where this page ended; cheaper than deep OFFSET paging.
+	NextCursor NullableString `json:"next_cursor,omitempty"`
 	Offset int64 `json:"offset"`
 	// Exact total match count; only present when `include_total=true`.
 	Total NullableInt64 `json:"total,omitempty"`
@@ -124,6 +126,48 @@ func (o *ListDeadLettersResponse) SetLimit(v int64) {
 	o.Limit = v
 }
 
+// GetNextCursor returns the NextCursor field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *ListDeadLettersResponse) GetNextCursor() string {
+	if o == nil || IsNil(o.NextCursor.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.NextCursor.Get()
+}
+
+// GetNextCursorOk returns a tuple with the NextCursor field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ListDeadLettersResponse) GetNextCursorOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.NextCursor.Get(), o.NextCursor.IsSet()
+}
+
+// HasNextCursor returns a boolean if a field has been set.
+func (o *ListDeadLettersResponse) HasNextCursor() bool {
+	if o != nil && o.NextCursor.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetNextCursor gets a reference to the given NullableString and assigns it to the NextCursor field.
+func (o *ListDeadLettersResponse) SetNextCursor(v string) {
+	o.NextCursor.Set(&v)
+}
+// SetNextCursorNil sets the value for NextCursor to be an explicit nil
+func (o *ListDeadLettersResponse) SetNextCursorNil() {
+	o.NextCursor.Set(nil)
+}
+
+// UnsetNextCursor ensures that no value is present for NextCursor, not even an explicit nil
+func (o *ListDeadLettersResponse) UnsetNextCursor() {
+	o.NextCursor.Unset()
+}
+
 // GetOffset returns the Offset field value
 func (o *ListDeadLettersResponse) GetOffset() int64 {
 	if o == nil {
@@ -203,6 +247,9 @@ func (o ListDeadLettersResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["dead_letters"] = o.DeadLetters
 	toSerialize["has_more"] = o.HasMore
 	toSerialize["limit"] = o.Limit
+	if o.NextCursor.IsSet() {
+		toSerialize["next_cursor"] = o.NextCursor.Get()
+	}
 	toSerialize["offset"] = o.Offset
 	if o.Total.IsSet() {
 		toSerialize["total"] = o.Total.Get()

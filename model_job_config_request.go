@@ -19,11 +19,19 @@ var _ MappedNullable = &JobConfigRequest{}
 
 // JobConfigRequest Optional per-job configuration overrides.
 type JobConfigRequest struct {
+	// Retry-delay jitter in `0.0..=1.0` (e.g. `0.1` = +/-10%).
+	JitterFactor NullableFloat64 `json:"jitter_factor,omitempty"`
 	MaxRetries NullableInt32 `json:"max_retries,omitempty"`
 	// Higher is claimed first within a queue (ties: oldest first).
 	Priority NullableInt32 `json:"priority,omitempty"`
 	// Override the destination queue.
 	Queue NullableString `json:"queue,omitempty"`
+	// How retry delays grow between attempts (default exponential).
+	RetryBackoff NullableBackoffStrategy `json:"retry_backoff,omitempty"`
+	// Base retry delay, in seconds.
+	RetryDelaySecs NullableInt64 `json:"retry_delay_secs,omitempty"`
+	// Upper bound on any computed retry delay, in seconds.
+	RetryMaxDelaySecs NullableInt64 `json:"retry_max_delay_secs,omitempty"`
 	// Per-attempt timeout, in seconds.
 	Timeout NullableInt64 `json:"timeout,omitempty"`
 }
@@ -43,6 +51,48 @@ func NewJobConfigRequest() *JobConfigRequest {
 func NewJobConfigRequestWithDefaults() *JobConfigRequest {
 	this := JobConfigRequest{}
 	return &this
+}
+
+// GetJitterFactor returns the JitterFactor field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *JobConfigRequest) GetJitterFactor() float64 {
+	if o == nil || IsNil(o.JitterFactor.Get()) {
+		var ret float64
+		return ret
+	}
+	return *o.JitterFactor.Get()
+}
+
+// GetJitterFactorOk returns a tuple with the JitterFactor field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *JobConfigRequest) GetJitterFactorOk() (*float64, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.JitterFactor.Get(), o.JitterFactor.IsSet()
+}
+
+// HasJitterFactor returns a boolean if a field has been set.
+func (o *JobConfigRequest) HasJitterFactor() bool {
+	if o != nil && o.JitterFactor.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetJitterFactor gets a reference to the given NullableFloat64 and assigns it to the JitterFactor field.
+func (o *JobConfigRequest) SetJitterFactor(v float64) {
+	o.JitterFactor.Set(&v)
+}
+// SetJitterFactorNil sets the value for JitterFactor to be an explicit nil
+func (o *JobConfigRequest) SetJitterFactorNil() {
+	o.JitterFactor.Set(nil)
+}
+
+// UnsetJitterFactor ensures that no value is present for JitterFactor, not even an explicit nil
+func (o *JobConfigRequest) UnsetJitterFactor() {
+	o.JitterFactor.Unset()
 }
 
 // GetMaxRetries returns the MaxRetries field value if set, zero value otherwise (both if not set or set to explicit null).
@@ -171,6 +221,132 @@ func (o *JobConfigRequest) UnsetQueue() {
 	o.Queue.Unset()
 }
 
+// GetRetryBackoff returns the RetryBackoff field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *JobConfigRequest) GetRetryBackoff() BackoffStrategy {
+	if o == nil || IsNil(o.RetryBackoff.Get()) {
+		var ret BackoffStrategy
+		return ret
+	}
+	return *o.RetryBackoff.Get()
+}
+
+// GetRetryBackoffOk returns a tuple with the RetryBackoff field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *JobConfigRequest) GetRetryBackoffOk() (*BackoffStrategy, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.RetryBackoff.Get(), o.RetryBackoff.IsSet()
+}
+
+// HasRetryBackoff returns a boolean if a field has been set.
+func (o *JobConfigRequest) HasRetryBackoff() bool {
+	if o != nil && o.RetryBackoff.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetRetryBackoff gets a reference to the given NullableBackoffStrategy and assigns it to the RetryBackoff field.
+func (o *JobConfigRequest) SetRetryBackoff(v BackoffStrategy) {
+	o.RetryBackoff.Set(&v)
+}
+// SetRetryBackoffNil sets the value for RetryBackoff to be an explicit nil
+func (o *JobConfigRequest) SetRetryBackoffNil() {
+	o.RetryBackoff.Set(nil)
+}
+
+// UnsetRetryBackoff ensures that no value is present for RetryBackoff, not even an explicit nil
+func (o *JobConfigRequest) UnsetRetryBackoff() {
+	o.RetryBackoff.Unset()
+}
+
+// GetRetryDelaySecs returns the RetryDelaySecs field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *JobConfigRequest) GetRetryDelaySecs() int64 {
+	if o == nil || IsNil(o.RetryDelaySecs.Get()) {
+		var ret int64
+		return ret
+	}
+	return *o.RetryDelaySecs.Get()
+}
+
+// GetRetryDelaySecsOk returns a tuple with the RetryDelaySecs field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *JobConfigRequest) GetRetryDelaySecsOk() (*int64, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.RetryDelaySecs.Get(), o.RetryDelaySecs.IsSet()
+}
+
+// HasRetryDelaySecs returns a boolean if a field has been set.
+func (o *JobConfigRequest) HasRetryDelaySecs() bool {
+	if o != nil && o.RetryDelaySecs.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetRetryDelaySecs gets a reference to the given NullableInt64 and assigns it to the RetryDelaySecs field.
+func (o *JobConfigRequest) SetRetryDelaySecs(v int64) {
+	o.RetryDelaySecs.Set(&v)
+}
+// SetRetryDelaySecsNil sets the value for RetryDelaySecs to be an explicit nil
+func (o *JobConfigRequest) SetRetryDelaySecsNil() {
+	o.RetryDelaySecs.Set(nil)
+}
+
+// UnsetRetryDelaySecs ensures that no value is present for RetryDelaySecs, not even an explicit nil
+func (o *JobConfigRequest) UnsetRetryDelaySecs() {
+	o.RetryDelaySecs.Unset()
+}
+
+// GetRetryMaxDelaySecs returns the RetryMaxDelaySecs field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *JobConfigRequest) GetRetryMaxDelaySecs() int64 {
+	if o == nil || IsNil(o.RetryMaxDelaySecs.Get()) {
+		var ret int64
+		return ret
+	}
+	return *o.RetryMaxDelaySecs.Get()
+}
+
+// GetRetryMaxDelaySecsOk returns a tuple with the RetryMaxDelaySecs field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *JobConfigRequest) GetRetryMaxDelaySecsOk() (*int64, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.RetryMaxDelaySecs.Get(), o.RetryMaxDelaySecs.IsSet()
+}
+
+// HasRetryMaxDelaySecs returns a boolean if a field has been set.
+func (o *JobConfigRequest) HasRetryMaxDelaySecs() bool {
+	if o != nil && o.RetryMaxDelaySecs.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetRetryMaxDelaySecs gets a reference to the given NullableInt64 and assigns it to the RetryMaxDelaySecs field.
+func (o *JobConfigRequest) SetRetryMaxDelaySecs(v int64) {
+	o.RetryMaxDelaySecs.Set(&v)
+}
+// SetRetryMaxDelaySecsNil sets the value for RetryMaxDelaySecs to be an explicit nil
+func (o *JobConfigRequest) SetRetryMaxDelaySecsNil() {
+	o.RetryMaxDelaySecs.Set(nil)
+}
+
+// UnsetRetryMaxDelaySecs ensures that no value is present for RetryMaxDelaySecs, not even an explicit nil
+func (o *JobConfigRequest) UnsetRetryMaxDelaySecs() {
+	o.RetryMaxDelaySecs.Unset()
+}
+
 // GetTimeout returns the Timeout field value if set, zero value otherwise (both if not set or set to explicit null).
 func (o *JobConfigRequest) GetTimeout() int64 {
 	if o == nil || IsNil(o.Timeout.Get()) {
@@ -223,6 +399,9 @@ func (o JobConfigRequest) MarshalJSON() ([]byte, error) {
 
 func (o JobConfigRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if o.JitterFactor.IsSet() {
+		toSerialize["jitter_factor"] = o.JitterFactor.Get()
+	}
 	if o.MaxRetries.IsSet() {
 		toSerialize["max_retries"] = o.MaxRetries.Get()
 	}
@@ -231,6 +410,15 @@ func (o JobConfigRequest) ToMap() (map[string]interface{}, error) {
 	}
 	if o.Queue.IsSet() {
 		toSerialize["queue"] = o.Queue.Get()
+	}
+	if o.RetryBackoff.IsSet() {
+		toSerialize["retry_backoff"] = o.RetryBackoff.Get()
+	}
+	if o.RetryDelaySecs.IsSet() {
+		toSerialize["retry_delay_secs"] = o.RetryDelaySecs.Get()
+	}
+	if o.RetryMaxDelaySecs.IsSet() {
+		toSerialize["retry_max_delay_secs"] = o.RetryMaxDelaySecs.Get()
 	}
 	if o.Timeout.IsSet() {
 		toSerialize["timeout"] = o.Timeout.Get()

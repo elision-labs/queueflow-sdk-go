@@ -12,39 +12,30 @@ package queueflow
 
 import (
 	"encoding/json"
-	"bytes"
-	"fmt"
 )
 
 // checks if the JobConfig type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &JobConfig{}
 
-// JobConfig Per-job execution configuration. All durations are in seconds.
+// JobConfig Per-job execution configuration. All durations are in seconds.  Deserialization is partial-friendly: any omitted field takes its [`JobConfig::default`] value (via per-field serde defaults), so workflow-step and cron config overrides can name just the fields they change, and out-of-band rows with sparse `config` JSONB still load. Per-field functions rather than a struct-level `#[serde(default)]`: the struct-level form makes utoipa attach a `default` beside the `BackoffStrategy` `$ref`, which forces a synthetic wrapper type into every generated SDK.
 type JobConfig struct {
 	// Optional jitter in `0.0..=1.0`. `0.1` => +/-10% randomization of each retry delay, which spreads out thundering-herd retries.
 	JitterFactor NullableFloat64 `json:"jitter_factor,omitempty"`
-	MaxRetries int32 `json:"max_retries"`
+	MaxRetries *int32 `json:"max_retries,omitempty"`
 	// Higher is claimed first within a queue; ties break on `scheduled_at`, then `created_at`.
-	Priority int32 `json:"priority"`
+	Priority *int32 `json:"priority,omitempty"`
 	RetryBackoff *BackoffStrategy `json:"retry_backoff,omitempty"`
-	RetryDelaySecs int64 `json:"retry_delay_secs"`
-	RetryMaxDelaySecs int64 `json:"retry_max_delay_secs"`
-	TimeoutSecs int64 `json:"timeout_secs"`
+	RetryDelaySecs *int64 `json:"retry_delay_secs,omitempty"`
+	RetryMaxDelaySecs *int64 `json:"retry_max_delay_secs,omitempty"`
+	TimeoutSecs *int64 `json:"timeout_secs,omitempty"`
 }
-
-type _JobConfig JobConfig
 
 // NewJobConfig instantiates a new JobConfig object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewJobConfig(maxRetries int32, priority int32, retryDelaySecs int64, retryMaxDelaySecs int64, timeoutSecs int64) *JobConfig {
+func NewJobConfig() *JobConfig {
 	this := JobConfig{}
-	this.MaxRetries = maxRetries
-	this.Priority = priority
-	this.RetryDelaySecs = retryDelaySecs
-	this.RetryMaxDelaySecs = retryMaxDelaySecs
-	this.TimeoutSecs = timeoutSecs
 	return &this
 }
 
@@ -98,52 +89,68 @@ func (o *JobConfig) UnsetJitterFactor() {
 	o.JitterFactor.Unset()
 }
 
-// GetMaxRetries returns the MaxRetries field value
+// GetMaxRetries returns the MaxRetries field value if set, zero value otherwise.
 func (o *JobConfig) GetMaxRetries() int32 {
-	if o == nil {
+	if o == nil || IsNil(o.MaxRetries) {
 		var ret int32
 		return ret
 	}
-
-	return o.MaxRetries
+	return *o.MaxRetries
 }
 
-// GetMaxRetriesOk returns a tuple with the MaxRetries field value
+// GetMaxRetriesOk returns a tuple with the MaxRetries field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *JobConfig) GetMaxRetriesOk() (*int32, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.MaxRetries) {
 		return nil, false
 	}
-	return &o.MaxRetries, true
+	return o.MaxRetries, true
 }
 
-// SetMaxRetries sets field value
+// HasMaxRetries returns a boolean if a field has been set.
+func (o *JobConfig) HasMaxRetries() bool {
+	if o != nil && !IsNil(o.MaxRetries) {
+		return true
+	}
+
+	return false
+}
+
+// SetMaxRetries gets a reference to the given int32 and assigns it to the MaxRetries field.
 func (o *JobConfig) SetMaxRetries(v int32) {
-	o.MaxRetries = v
+	o.MaxRetries = &v
 }
 
-// GetPriority returns the Priority field value
+// GetPriority returns the Priority field value if set, zero value otherwise.
 func (o *JobConfig) GetPriority() int32 {
-	if o == nil {
+	if o == nil || IsNil(o.Priority) {
 		var ret int32
 		return ret
 	}
-
-	return o.Priority
+	return *o.Priority
 }
 
-// GetPriorityOk returns a tuple with the Priority field value
+// GetPriorityOk returns a tuple with the Priority field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *JobConfig) GetPriorityOk() (*int32, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.Priority) {
 		return nil, false
 	}
-	return &o.Priority, true
+	return o.Priority, true
 }
 
-// SetPriority sets field value
+// HasPriority returns a boolean if a field has been set.
+func (o *JobConfig) HasPriority() bool {
+	if o != nil && !IsNil(o.Priority) {
+		return true
+	}
+
+	return false
+}
+
+// SetPriority gets a reference to the given int32 and assigns it to the Priority field.
 func (o *JobConfig) SetPriority(v int32) {
-	o.Priority = v
+	o.Priority = &v
 }
 
 // GetRetryBackoff returns the RetryBackoff field value if set, zero value otherwise.
@@ -178,76 +185,100 @@ func (o *JobConfig) SetRetryBackoff(v BackoffStrategy) {
 	o.RetryBackoff = &v
 }
 
-// GetRetryDelaySecs returns the RetryDelaySecs field value
+// GetRetryDelaySecs returns the RetryDelaySecs field value if set, zero value otherwise.
 func (o *JobConfig) GetRetryDelaySecs() int64 {
-	if o == nil {
+	if o == nil || IsNil(o.RetryDelaySecs) {
 		var ret int64
 		return ret
 	}
-
-	return o.RetryDelaySecs
+	return *o.RetryDelaySecs
 }
 
-// GetRetryDelaySecsOk returns a tuple with the RetryDelaySecs field value
+// GetRetryDelaySecsOk returns a tuple with the RetryDelaySecs field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *JobConfig) GetRetryDelaySecsOk() (*int64, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.RetryDelaySecs) {
 		return nil, false
 	}
-	return &o.RetryDelaySecs, true
+	return o.RetryDelaySecs, true
 }
 
-// SetRetryDelaySecs sets field value
+// HasRetryDelaySecs returns a boolean if a field has been set.
+func (o *JobConfig) HasRetryDelaySecs() bool {
+	if o != nil && !IsNil(o.RetryDelaySecs) {
+		return true
+	}
+
+	return false
+}
+
+// SetRetryDelaySecs gets a reference to the given int64 and assigns it to the RetryDelaySecs field.
 func (o *JobConfig) SetRetryDelaySecs(v int64) {
-	o.RetryDelaySecs = v
+	o.RetryDelaySecs = &v
 }
 
-// GetRetryMaxDelaySecs returns the RetryMaxDelaySecs field value
+// GetRetryMaxDelaySecs returns the RetryMaxDelaySecs field value if set, zero value otherwise.
 func (o *JobConfig) GetRetryMaxDelaySecs() int64 {
-	if o == nil {
+	if o == nil || IsNil(o.RetryMaxDelaySecs) {
 		var ret int64
 		return ret
 	}
-
-	return o.RetryMaxDelaySecs
+	return *o.RetryMaxDelaySecs
 }
 
-// GetRetryMaxDelaySecsOk returns a tuple with the RetryMaxDelaySecs field value
+// GetRetryMaxDelaySecsOk returns a tuple with the RetryMaxDelaySecs field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *JobConfig) GetRetryMaxDelaySecsOk() (*int64, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.RetryMaxDelaySecs) {
 		return nil, false
 	}
-	return &o.RetryMaxDelaySecs, true
+	return o.RetryMaxDelaySecs, true
 }
 
-// SetRetryMaxDelaySecs sets field value
+// HasRetryMaxDelaySecs returns a boolean if a field has been set.
+func (o *JobConfig) HasRetryMaxDelaySecs() bool {
+	if o != nil && !IsNil(o.RetryMaxDelaySecs) {
+		return true
+	}
+
+	return false
+}
+
+// SetRetryMaxDelaySecs gets a reference to the given int64 and assigns it to the RetryMaxDelaySecs field.
 func (o *JobConfig) SetRetryMaxDelaySecs(v int64) {
-	o.RetryMaxDelaySecs = v
+	o.RetryMaxDelaySecs = &v
 }
 
-// GetTimeoutSecs returns the TimeoutSecs field value
+// GetTimeoutSecs returns the TimeoutSecs field value if set, zero value otherwise.
 func (o *JobConfig) GetTimeoutSecs() int64 {
-	if o == nil {
+	if o == nil || IsNil(o.TimeoutSecs) {
 		var ret int64
 		return ret
 	}
-
-	return o.TimeoutSecs
+	return *o.TimeoutSecs
 }
 
-// GetTimeoutSecsOk returns a tuple with the TimeoutSecs field value
+// GetTimeoutSecsOk returns a tuple with the TimeoutSecs field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *JobConfig) GetTimeoutSecsOk() (*int64, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.TimeoutSecs) {
 		return nil, false
 	}
-	return &o.TimeoutSecs, true
+	return o.TimeoutSecs, true
 }
 
-// SetTimeoutSecs sets field value
+// HasTimeoutSecs returns a boolean if a field has been set.
+func (o *JobConfig) HasTimeoutSecs() bool {
+	if o != nil && !IsNil(o.TimeoutSecs) {
+		return true
+	}
+
+	return false
+}
+
+// SetTimeoutSecs gets a reference to the given int64 and assigns it to the TimeoutSecs field.
 func (o *JobConfig) SetTimeoutSecs(v int64) {
-	o.TimeoutSecs = v
+	o.TimeoutSecs = &v
 }
 
 func (o JobConfig) MarshalJSON() ([]byte, error) {
@@ -263,56 +294,25 @@ func (o JobConfig) ToMap() (map[string]interface{}, error) {
 	if o.JitterFactor.IsSet() {
 		toSerialize["jitter_factor"] = o.JitterFactor.Get()
 	}
-	toSerialize["max_retries"] = o.MaxRetries
-	toSerialize["priority"] = o.Priority
+	if !IsNil(o.MaxRetries) {
+		toSerialize["max_retries"] = o.MaxRetries
+	}
+	if !IsNil(o.Priority) {
+		toSerialize["priority"] = o.Priority
+	}
 	if !IsNil(o.RetryBackoff) {
 		toSerialize["retry_backoff"] = o.RetryBackoff
 	}
-	toSerialize["retry_delay_secs"] = o.RetryDelaySecs
-	toSerialize["retry_max_delay_secs"] = o.RetryMaxDelaySecs
-	toSerialize["timeout_secs"] = o.TimeoutSecs
+	if !IsNil(o.RetryDelaySecs) {
+		toSerialize["retry_delay_secs"] = o.RetryDelaySecs
+	}
+	if !IsNil(o.RetryMaxDelaySecs) {
+		toSerialize["retry_max_delay_secs"] = o.RetryMaxDelaySecs
+	}
+	if !IsNil(o.TimeoutSecs) {
+		toSerialize["timeout_secs"] = o.TimeoutSecs
+	}
 	return toSerialize, nil
-}
-
-func (o *JobConfig) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"max_retries",
-		"priority",
-		"retry_delay_secs",
-		"retry_max_delay_secs",
-		"timeout_secs",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err;
-	}
-
-	for _, requiredProperty := range(requiredProperties) {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
-
-	varJobConfig := _JobConfig{}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varJobConfig)
-
-	if err != nil {
-		return err
-	}
-
-	*o = JobConfig(varJobConfig)
-
-	return err
 }
 
 type NullableJobConfig struct {

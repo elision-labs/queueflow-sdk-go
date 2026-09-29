@@ -89,6 +89,16 @@ paths:
         schema:
           type: boolean
         style: form
+      - description: |-
+          Opaque keyset cursor from a previous page's `next_cursor`. When set,
+          `offset` is ignored and listing continues where that page ended.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -351,6 +361,16 @@ paths:
         schema:
           type: boolean
         style: form
+      - description: |-
+          Opaque keyset cursor from a previous page's `next_cursor`. When set,
+          `offset` is ignored and listing continues where that page ended.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -515,6 +535,16 @@ paths:
         required: false
         schema:
           type: boolean
+        style: form
+      - description: |-
+          Opaque keyset cursor from a previous page's `next_cursor`. When set,
+          `offset` is ignored and listing continues where that page ended.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
         style: form
       responses:
         "200":
@@ -1008,6 +1038,16 @@ paths:
         schema:
           type: boolean
         style: form
+      - description: |-
+          Opaque keyset cursor from a previous page's `next_cursor`. When set,
+          `offset` is ignored and listing continues where that page ended.
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -1239,7 +1279,11 @@ components:
           run_at: 2000-01-23T04:56:07.000+00:00
           config:
             max_retries: 0
-            priority: 6
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
             queue: queue
             timeout: 0
         - task_name: task_name
@@ -1248,7 +1292,11 @@ components:
           run_at: 2000-01-23T04:56:07.000+00:00
           config:
             max_retries: 0
-            priority: 6
+            retry_max_delay_secs: 0
+            retry_backoff: fixed
+            priority: 1
+            retry_delay_secs: 0
+            jitter_factor: 0.8008281904610115
             queue: queue
             timeout: 0
       properties:
@@ -1329,7 +1377,11 @@ components:
         run_at: 2000-01-23T04:56:07.000+00:00
         config:
           max_retries: 0
-          priority: 6
+          retry_max_delay_secs: 0
+          retry_backoff: fixed
+          priority: 1
+          retry_delay_secs: 0
+          jitter_factor: 0.8008281904610115
           queue: queue
           timeout: 0
       properties:
@@ -1751,7 +1803,17 @@ components:
       - status
       - task_name
     JobConfig:
-      description: Per-job execution configuration. All durations are in seconds.
+      description: |-
+        Per-job execution configuration. All durations are in seconds.
+
+        Deserialization is partial-friendly: any omitted field takes its
+        [`JobConfig::default`] value (via per-field serde defaults), so
+        workflow-step and cron config overrides can name just the fields they
+        change, and out-of-band rows with sparse `config` JSONB still load.
+        Per-field functions rather than a struct-level `#[serde(default)]`:
+        the struct-level form makes utoipa attach a `default` beside the
+        `BackoffStrategy` `$ref`, which forces a synthetic wrapper type into
+        every generated SDK.
       example:
         max_retries: 0
         retry_max_delay_secs: 0
@@ -1792,20 +1854,23 @@ components:
           format: int64
           minimum: 0
           type: integer
-      required:
-      - max_retries
-      - priority
-      - retry_delay_secs
-      - retry_max_delay_secs
-      - timeout_secs
     JobConfigRequest:
       description: Optional per-job configuration overrides.
       example:
         max_retries: 0
-        priority: 6
+        retry_max_delay_secs: 0
+        retry_backoff: fixed
+        priority: 1
+        retry_delay_secs: 0
+        jitter_factor: 0.8008281904610115
         queue: queue
         timeout: 0
       properties:
+        jitter_factor:
+          description: Retry-delay jitter in `0.0..=1.0` (e.g. `0.1` = +/-10%).
+          format: double
+          nullable: true
+          type: number
         max_retries:
           format: int32
           minimum: 0
@@ -1820,6 +1885,20 @@ components:
           description: Override the destination queue.
           nullable: true
           type: string
+        retry_backoff:
+          $ref: '#/components/schemas/BackoffStrategy'
+        retry_delay_secs:
+          description: "Base retry delay, in seconds."
+          format: int64
+          minimum: 0
+          nullable: true
+          type: integer
+        retry_max_delay_secs:
+          description: "Upper bound on any computed retry delay, in seconds."
+          format: int64
+          minimum: 0
+          nullable: true
+          type: integer
         timeout:
           description: "Per-attempt timeout, in seconds."
           format: int64
@@ -1987,6 +2066,7 @@ components:
       - lease_token
     ListCronsResponse:
       example:
+        next_cursor: next_cursor
         total: 3
         offset: 9
         limit: 7
@@ -2042,6 +2122,13 @@ components:
         limit:
           format: int64
           type: integer
+        next_cursor:
+          description: |-
+            Opaque keyset cursor for the next page (present when `has_more`).
+            Pass it back as `cursor` to continue where this page ended; cheaper
+            than deep OFFSET paging.
+          nullable: true
+          type: string
         offset:
           format: int64
           type: integer
@@ -2057,6 +2144,7 @@ components:
       - offset
     ListDeadLettersResponse:
       example:
+        next_cursor: next_cursor
         total: 5
         dead_letters:
         - error_message: error_message
@@ -2092,6 +2180,13 @@ components:
         limit:
           format: int64
           type: integer
+        next_cursor:
+          description: |-
+            Opaque keyset cursor for the next page (present when `has_more`).
+            Pass it back as `cursor` to continue where this page ended; cheaper
+            than deep OFFSET paging.
+          nullable: true
+          type: string
         offset:
           format: int64
           type: integer
@@ -2107,6 +2202,7 @@ components:
       - offset
     ListJobsResponse:
       example:
+        next_cursor: next_cursor
         total: 5
         offset: 5
         jobs:
@@ -2182,6 +2278,13 @@ components:
         limit:
           format: int64
           type: integer
+        next_cursor:
+          description: |-
+            Opaque keyset cursor for the next page (present when `has_more`).
+            Pass it back as `cursor` to continue where this page ended; cheaper
+            than deep OFFSET paging.
+          nullable: true
+          type: string
         offset:
           format: int64
           type: integer
@@ -2200,6 +2303,7 @@ components:
       - offset
     ListWorkflowsResponse:
       example:
+        next_cursor: next_cursor
         total: 1
         offset: 6
         limit: 0
@@ -2311,6 +2415,13 @@ components:
         limit:
           format: int64
           type: integer
+        next_cursor:
+          description: |-
+            Opaque keyset cursor for the next page (present when `has_more`).
+            Pass it back as `cursor` to continue where this page ended; cheaper
+            than deep OFFSET paging.
+          nullable: true
+          type: string
         offset:
           format: int64
           type: integer

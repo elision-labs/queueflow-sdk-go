@@ -5,18 +5,18 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **JitterFactor** | Pointer to **NullableFloat64** | Optional jitter in &#x60;0.0..&#x3D;1.0&#x60;. &#x60;0.1&#x60; &#x3D;&gt; +/-10% randomization of each retry delay, which spreads out thundering-herd retries. | [optional] 
-**MaxRetries** | **int32** |  | 
-**Priority** | **int32** | Higher is claimed first within a queue; ties break on &#x60;scheduled_at&#x60;, then &#x60;created_at&#x60;. | 
+**MaxRetries** | Pointer to **int32** |  | [optional] 
+**Priority** | Pointer to **int32** | Higher is claimed first within a queue; ties break on &#x60;scheduled_at&#x60;, then &#x60;created_at&#x60;. | [optional] 
 **RetryBackoff** | Pointer to [**BackoffStrategy**](BackoffStrategy.md) |  | [optional] 
-**RetryDelaySecs** | **int64** |  | 
-**RetryMaxDelaySecs** | **int64** |  | 
-**TimeoutSecs** | **int64** |  | 
+**RetryDelaySecs** | Pointer to **int64** |  | [optional] 
+**RetryMaxDelaySecs** | Pointer to **int64** |  | [optional] 
+**TimeoutSecs** | Pointer to **int64** |  | [optional] 
 
 ## Methods
 
 ### NewJobConfig
 
-`func NewJobConfig(maxRetries int32, priority int32, retryDelaySecs int64, retryMaxDelaySecs int64, timeoutSecs int64, ) *JobConfig`
+`func NewJobConfig() *JobConfig`
 
 NewJobConfig instantiates a new JobConfig object
 This constructor will assign default values to properties that have it defined,
@@ -85,6 +85,11 @@ and a boolean to check if the value has been set.
 
 SetMaxRetries sets MaxRetries field to given value.
 
+### HasMaxRetries
+
+`func (o *JobConfig) HasMaxRetries() bool`
+
+HasMaxRetries returns a boolean if a field has been set.
 
 ### GetPriority
 
@@ -105,6 +110,11 @@ and a boolean to check if the value has been set.
 
 SetPriority sets Priority field to given value.
 
+### HasPriority
+
+`func (o *JobConfig) HasPriority() bool`
+
+HasPriority returns a boolean if a field has been set.
 
 ### GetRetryBackoff
 
@@ -150,6 +160,11 @@ and a boolean to check if the value has been set.
 
 SetRetryDelaySecs sets RetryDelaySecs field to given value.
 
+### HasRetryDelaySecs
+
+`func (o *JobConfig) HasRetryDelaySecs() bool`
+
+HasRetryDelaySecs returns a boolean if a field has been set.
 
 ### GetRetryMaxDelaySecs
 
@@ -170,6 +185,11 @@ and a boolean to check if the value has been set.
 
 SetRetryMaxDelaySecs sets RetryMaxDelaySecs field to given value.
 
+### HasRetryMaxDelaySecs
+
+`func (o *JobConfig) HasRetryMaxDelaySecs() bool`
+
+HasRetryMaxDelaySecs returns a boolean if a field has been set.
 
 ### GetTimeoutSecs
 
@@ -190,6 +210,11 @@ and a boolean to check if the value has been set.
 
 SetTimeoutSecs sets TimeoutSecs field to given value.
 
+### HasTimeoutSecs
+
+`func (o *JobConfig) HasTimeoutSecs() bool`
+
+HasTimeoutSecs returns a boolean if a field has been set.
 
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

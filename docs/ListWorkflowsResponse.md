@@ -6,6 +6,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **HasMore** | **bool** |  | 
 **Limit** | **int64** |  | 
+**NextCursor** | Pointer to **NullableString** | Opaque keyset cursor for the next page (present when &#x60;has_more&#x60;). Pass it back as &#x60;cursor&#x60; to continue where this page ended; cheaper than deep OFFSET paging. | [optional] 
 **Offset** | **int64** |  | 
 **Total** | Pointer to **NullableInt64** | Exact total match count; only present when &#x60;include_total&#x3D;true&#x60;. | [optional] 
 **Workflows** | [**[]Workflow**](Workflow.md) |  | 
@@ -69,6 +70,41 @@ and a boolean to check if the value has been set.
 SetLimit sets Limit field to given value.
 
 
+### GetNextCursor
+
+`func (o *ListWorkflowsResponse) GetNextCursor() string`
+
+GetNextCursor returns the NextCursor field if non-nil, zero value otherwise.
+
+### GetNextCursorOk
+
+`func (o *ListWorkflowsResponse) GetNextCursorOk() (*string, bool)`
+
+GetNextCursorOk returns a tuple with the NextCursor field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetNextCursor
+
+`func (o *ListWorkflowsResponse) SetNextCursor(v string)`
+
+SetNextCursor sets NextCursor field to given value.
+
+### HasNextCursor
+
+`func (o *ListWorkflowsResponse) HasNextCursor() bool`
+
+HasNextCursor returns a boolean if a field has been set.
+
+### SetNextCursorNil
+
+`func (o *ListWorkflowsResponse) SetNextCursorNil(b bool)`
+
+ SetNextCursorNil sets the value for NextCursor to be an explicit nil
+
+### UnsetNextCursor
+`func (o *ListWorkflowsResponse) UnsetNextCursor()`
+
+UnsetNextCursor ensures that no value is present for NextCursor, not even an explicit nil
 ### GetOffset
 
 `func (o *ListWorkflowsResponse) GetOffset() int64`

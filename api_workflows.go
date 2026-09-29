@@ -538,6 +538,7 @@ type ApiListWorkflowsRequest struct {
 	offset *int64
 	orderBy *string
 	includeTotal *bool
+	cursor *string
 }
 
 // Filter by status (e.g. &#x60;pending&#x60;, &#x60;completed&#x60;).
@@ -573,6 +574,12 @@ func (r ApiListWorkflowsRequest) OrderBy(orderBy string) ApiListWorkflowsRequest
 // Include the exact &#x60;total&#x60; count in the response (default false; the count is an extra full scan over the filtered set).
 func (r ApiListWorkflowsRequest) IncludeTotal(includeTotal bool) ApiListWorkflowsRequest {
 	r.includeTotal = &includeTotal
+	return r
+}
+
+// Opaque keyset cursor from a previous page&#39;s &#x60;next_cursor&#x60;. When set, &#x60;offset&#x60; is ignored and listing continues where that page ended.
+func (r ApiListWorkflowsRequest) Cursor(cursor string) ApiListWorkflowsRequest {
+	r.cursor = &cursor
 	return r
 }
 
@@ -631,6 +638,9 @@ func (a *WorkflowsAPIService) ListWorkflowsExecute(r ApiListWorkflowsRequest) (*
 	}
 	if r.includeTotal != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "include_total", r.includeTotal, "form", "")
+	}
+	if r.cursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
