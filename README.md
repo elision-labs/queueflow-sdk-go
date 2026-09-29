@@ -106,6 +106,7 @@ Class | Method | HTTP request | Description
 *WorkflowsAPI* | [**CreateWorkflow**](docs/WorkflowsAPI.md#createworkflow) | **Post** /api/v1/workflows | 
 *WorkflowsAPI* | [**GetWorkflow**](docs/WorkflowsAPI.md#getworkflow) | **Get** /api/v1/workflows/{id} | 
 *WorkflowsAPI* | [**GetWorkflowDiagram**](docs/WorkflowsAPI.md#getworkflowdiagram) | **Get** /api/v1/workflows/{id}/diagram | 
+*WorkflowsAPI* | [**GetWorkflowStepStates**](docs/WorkflowsAPI.md#getworkflowstepstates) | **Get** /api/v1/workflows/{id}/steps | 
 *WorkflowsAPI* | [**ListWorkflows**](docs/WorkflowsAPI.md#listworkflows) | **Get** /api/v1/workflows | 
 
 
@@ -144,11 +145,14 @@ Class | Method | HTTP request | Description
  - [ReadyStatus](docs/ReadyStatus.md)
  - [ReplayDeadLetterResponse](docs/ReplayDeadLetterResponse.md)
  - [StatsSnapshot](docs/StatsSnapshot.md)
+ - [StepStatus](docs/StepStatus.md)
  - [TasksResponse](docs/TasksResponse.md)
  - [Workflow](docs/Workflow.md)
  - [WorkflowDiagramResponse](docs/WorkflowDiagramResponse.md)
  - [WorkflowStatus](docs/WorkflowStatus.md)
  - [WorkflowStep](docs/WorkflowStep.md)
+ - [WorkflowStepState](docs/WorkflowStepState.md)
+ - [WorkflowStepStatesResponse](docs/WorkflowStepStatesResponse.md)
 
 
 ## Documentation For Authorization

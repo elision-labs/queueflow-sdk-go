@@ -50,6 +50,7 @@ docs/OnSuccess.md
 docs/ReadyStatus.md
 docs/ReplayDeadLetterResponse.md
 docs/StatsSnapshot.md
+docs/StepStatus.md
 docs/SystemAPI.md
 docs/TasksResponse.md
 docs/WorkerAPI.md
@@ -57,6 +58,8 @@ docs/Workflow.md
 docs/WorkflowDiagramResponse.md
 docs/WorkflowStatus.md
 docs/WorkflowStep.md
+docs/WorkflowStepState.md
+docs/WorkflowStepStatesResponse.md
 docs/WorkflowsAPI.md
 facade.go
 git_push.sh
@@ -95,11 +98,14 @@ model_on_success.go
 model_ready_status.go
 model_replay_dead_letter_response.go
 model_stats_snapshot.go
+model_step_status.go
 model_tasks_response.go
 model_workflow.go
 model_workflow_diagram_response.go
 model_workflow_status.go
 model_workflow_step.go
+model_workflow_step_state.go
+model_workflow_step_states_response.go
 response.go
 test/api_cron_test.go
 test/api_dlq_test.go

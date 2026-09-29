@@ -1209,6 +1209,48 @@ paths:
       - bearerAuth: []
       tags:
       - workflows
+  /api/v1/workflows/{id}/steps:
+    get:
+      operationId: getWorkflowStepStates
+      parameters:
+      - description: Workflow id
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStepStatesResponse'
+          description: "Runtime status of every step, in declaration order. The workflow\
+            \ record carries only step definitions; this is the live progress view."
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Not found
+      security:
+      - bearerAuth: []
+      tags:
+      - workflows
   /health:
     get:
       operationId: getHealth
@@ -2521,6 +2563,16 @@ components:
       - workflows_completed
       - workflows_created
       - workflows_failed
+    StepStatus:
+      description: Lifecycle state of a single workflow step.
+      enum:
+      - pending
+      - running
+      - completed
+      - failed
+      - cancelled
+      - skipped
+      type: string
     TasksResponse:
       example:
         tasks:
@@ -2694,6 +2746,42 @@ components:
       required:
       - name
       - task_name
+    WorkflowStepState:
+      description: Runtime status of one workflow step (the live progress view).
+      example:
+        job_id: job_id
+        name: name
+        status: pending
+      properties:
+        job_id:
+          description: "The job executing this step, once one has been scheduled."
+          nullable: true
+          type: string
+        name:
+          description: The step's name (its address within the workflow).
+          type: string
+        status:
+          $ref: '#/components/schemas/StepStatus'
+      required:
+      - name
+      - status
+    WorkflowStepStatesResponse:
+      example:
+        steps:
+        - job_id: job_id
+          name: name
+          status: pending
+        - job_id: job_id
+          name: name
+          status: pending
+      properties:
+        steps:
+          description: "One entry per step, in declaration order."
+          items:
+            $ref: '#/components/schemas/WorkflowStepState'
+          type: array
+      required:
+      - steps
   securitySchemes:
     bearerAuth:
       bearerFormat: API Key

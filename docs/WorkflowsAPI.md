@@ -8,6 +8,7 @@ Method | HTTP request | Description
 [**CreateWorkflow**](WorkflowsAPI.md#CreateWorkflow) | **Post** /api/v1/workflows | 
 [**GetWorkflow**](WorkflowsAPI.md#GetWorkflow) | **Get** /api/v1/workflows/{id} | 
 [**GetWorkflowDiagram**](WorkflowsAPI.md#GetWorkflowDiagram) | **Get** /api/v1/workflows/{id}/diagram | 
+[**GetWorkflowStepStates**](WorkflowsAPI.md#GetWorkflowStepStates) | **Get** /api/v1/workflows/{id}/steps | 
 [**ListWorkflows**](WorkflowsAPI.md#ListWorkflows) | **Get** /api/v1/workflows | 
 
 
@@ -263,6 +264,74 @@ Name | Type | Description  | Notes
 ### Return type
 
 [**WorkflowDiagramResponse**](WorkflowDiagramResponse.md)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## GetWorkflowStepStates
+
+> WorkflowStepStatesResponse GetWorkflowStepStates(ctx, id).Execute()
+
+
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/queue-flow/sdk-go"
+)
+
+func main() {
+	id := "id_example" // string | Workflow id
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	resp, r, err := apiClient.WorkflowsAPI.GetWorkflowStepStates(context.Background(), id).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `WorkflowsAPI.GetWorkflowStepStates``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+	// response from `GetWorkflowStepStates`: WorkflowStepStatesResponse
+	fmt.Fprintf(os.Stdout, "Response from `WorkflowsAPI.GetWorkflowStepStates`: %v\n", resp)
+}
+```
+
+### Path Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+**ctx** | **context.Context** | context for authentication, logging, cancellation, deadlines, tracing, etc.
+**id** | **string** | Workflow id | 
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiGetWorkflowStepStatesRequest struct via the builder pattern
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+
+
+### Return type
+
+[**WorkflowStepStatesResponse**](WorkflowStepStatesResponse.md)
 
 ### Authorization
 
