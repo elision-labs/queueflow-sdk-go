@@ -349,7 +349,7 @@ Name | Type | Description  | Notes
 
 ## ListWorkflows
 
-> ListWorkflowsResponse ListWorkflows(ctx).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).Execute()
+> ListWorkflowsResponse ListWorkflows(ctx).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 
 
 
@@ -362,6 +362,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+    "time"
 	openapiclient "github.com/queue-flow/sdk-go"
 )
 
@@ -373,10 +374,12 @@ func main() {
 	orderBy := "orderBy_example" // string | `created_at ASC` or `created_at DESC` (default DESC). (optional)
 	includeTotal := true // bool | Include the exact `total` count in the response (default false; the count is an extra full scan over the filtered set). (optional)
 	cursor := "cursor_example" // string | Opaque keyset cursor from a previous page's `next_cursor`. When set, `offset` is ignored and listing continues where that page ended. (optional)
+	createdAfter := time.Now() // time.Time | Only rows created at or after this instant (RFC 3339, inclusive). With `created_before` this forms the half-open range `[after, before)` — the natural shape for walking history period by period. (optional)
+	createdBefore := time.Now() // time.Time | Only rows created strictly before this instant (RFC 3339, exclusive). (optional)
 
 	configuration := openapiclient.NewConfiguration()
 	apiClient := openapiclient.NewAPIClient(configuration)
-	resp, r, err := apiClient.WorkflowsAPI.ListWorkflows(context.Background()).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).Execute()
+	resp, r, err := apiClient.WorkflowsAPI.ListWorkflows(context.Background()).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error when calling `WorkflowsAPI.ListWorkflows``: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
@@ -404,6 +407,8 @@ Name | Type | Description  | Notes
  **orderBy** | **string** | &#x60;created_at ASC&#x60; or &#x60;created_at DESC&#x60; (default DESC). | 
  **includeTotal** | **bool** | Include the exact &#x60;total&#x60; count in the response (default false; the count is an extra full scan over the filtered set). | 
  **cursor** | **string** | Opaque keyset cursor from a previous page&#39;s &#x60;next_cursor&#x60;. When set, &#x60;offset&#x60; is ignored and listing continues where that page ended. | 
+ **createdAfter** | **time.Time** | Only rows created at or after this instant (RFC 3339, inclusive). With &#x60;created_before&#x60; this forms the half-open range &#x60;[after, before)&#x60; — the natural shape for walking history period by period. | 
+ **createdBefore** | **time.Time** | Only rows created strictly before this instant (RFC 3339, exclusive). | 
 
 ### Return type
 

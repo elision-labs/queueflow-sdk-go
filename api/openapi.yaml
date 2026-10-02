@@ -99,6 +99,27 @@ paths:
         schema:
           type: string
         style: form
+      - description: |-
+          Only rows created at or after this instant (RFC 3339, inclusive).
+          With `created_before` this forms the half-open range `[after, before)`
+          — the natural shape for walking history period by period.
+        explode: true
+        in: query
+        name: created_after
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Only rows created strictly before this instant (RFC 3339, exclusive)."
+        explode: true
+        in: query
+        name: created_before
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -371,6 +392,27 @@ paths:
         schema:
           type: string
         style: form
+      - description: |-
+          Only rows created at or after this instant (RFC 3339, inclusive).
+          With `created_before` this forms the half-open range `[after, before)`
+          — the natural shape for walking history period by period.
+        explode: true
+        in: query
+        name: created_after
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Only rows created strictly before this instant (RFC 3339, exclusive)."
+        explode: true
+        in: query
+        name: created_before
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -544,6 +586,27 @@ paths:
         name: cursor
         required: false
         schema:
+          type: string
+        style: form
+      - description: |-
+          Only rows created at or after this instant (RFC 3339, inclusive).
+          With `created_before` this forms the half-open range `[after, before)`
+          — the natural shape for walking history period by period.
+        explode: true
+        in: query
+        name: created_after
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Only rows created strictly before this instant (RFC 3339, exclusive)."
+        explode: true
+        in: query
+        name: created_before
+        required: false
+        schema:
+          format: date-time
           type: string
         style: form
       responses:
@@ -1046,6 +1109,27 @@ paths:
         name: cursor
         required: false
         schema:
+          type: string
+        style: form
+      - description: |-
+          Only rows created at or after this instant (RFC 3339, inclusive).
+          With `created_before` this forms the half-open range `[after, before)`
+          — the natural shape for walking history period by period.
+        explode: true
+        in: query
+        name: created_after
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Only rows created strictly before this instant (RFC 3339, exclusive)."
+        explode: true
+        in: query
+        name: created_before
+        required: false
+        schema:
+          format: date-time
           type: string
         style: form
       responses:

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 
@@ -545,6 +546,8 @@ type ApiListJobsRequest struct {
 	orderBy *string
 	includeTotal *bool
 	cursor *string
+	createdAfter *time.Time
+	createdBefore *time.Time
 }
 
 // Filter by status (e.g. &#x60;pending&#x60;, &#x60;completed&#x60;).
@@ -586,6 +589,18 @@ func (r ApiListJobsRequest) IncludeTotal(includeTotal bool) ApiListJobsRequest {
 // Opaque keyset cursor from a previous page&#39;s &#x60;next_cursor&#x60;. When set, &#x60;offset&#x60; is ignored and listing continues where that page ended.
 func (r ApiListJobsRequest) Cursor(cursor string) ApiListJobsRequest {
 	r.cursor = &cursor
+	return r
+}
+
+// Only rows created at or after this instant (RFC 3339, inclusive). With &#x60;created_before&#x60; this forms the half-open range &#x60;[after, before)&#x60; — the natural shape for walking history period by period.
+func (r ApiListJobsRequest) CreatedAfter(createdAfter time.Time) ApiListJobsRequest {
+	r.createdAfter = &createdAfter
+	return r
+}
+
+// Only rows created strictly before this instant (RFC 3339, exclusive).
+func (r ApiListJobsRequest) CreatedBefore(createdBefore time.Time) ApiListJobsRequest {
+	r.createdBefore = &createdBefore
 	return r
 }
 
@@ -647,6 +662,12 @@ func (a *JobsAPIService) ListJobsExecute(r ApiListJobsRequest) (*ListJobsRespons
 	}
 	if r.cursor != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
+	}
+	if r.createdAfter != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "created_after", r.createdAfter, "form", "")
+	}
+	if r.createdBefore != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "created_before", r.createdBefore, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
