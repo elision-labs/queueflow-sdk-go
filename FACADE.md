@@ -13,7 +13,7 @@ import (
 	"log"
 	"time"
 
-	queueflow "github.com/queue-flow/sdk-go"
+	queueflow "github.com/elision-labs/queueflow-sdk-go"
 )
 
 func main() {

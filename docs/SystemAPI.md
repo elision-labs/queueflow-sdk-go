@@ -24,7 +24,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	openapiclient "github.com/queue-flow/sdk-go"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
 )
 
 func main() {
@@ -83,7 +83,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	openapiclient "github.com/queue-flow/sdk-go"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
 )
 
 func main() {

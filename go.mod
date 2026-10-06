@@ -1,4 +1,4 @@
-module github.com/queue-flow/sdk-go
+module github.com/elision-labs/queueflow-sdk-go
 
 go 1.18
 

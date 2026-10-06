@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
-	openapiclient "github.com/queue-flow/sdk-go"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
 )
 
 func Test_queueflow_CronAPIService(t *testing.T) {

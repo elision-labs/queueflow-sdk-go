@@ -23,7 +23,7 @@ go get golang.org/x/net/context
 Put the package under your project folder and add the following in import:
 
 ```go
-import queueflow "github.com/queue-flow/sdk-go"
+import queueflow "github.com/elision-labs/queueflow-sdk-go"
 ```
 
 To use a proxy, set the environment variable `HTTP_PROXY`:
