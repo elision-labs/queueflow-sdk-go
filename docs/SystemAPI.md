@@ -5,6 +5,7 @@ All URIs are relative to *http://localhost:8000*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**GetStats**](SystemAPI.md#GetStats) | **Get** /api/v1/stats | 
+[**ListQueues**](SystemAPI.md#ListQueues) | **Get** /api/v1/queues | 
 [**ListTasks**](SystemAPI.md#ListTasks) | **Get** /api/v1/tasks | 
 
 
@@ -53,6 +54,65 @@ Other parameters are passed through a pointer to a apiGetStatsRequest struct via
 ### Return type
 
 [**StatsSnapshot**](StatsSnapshot.md)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## ListQueues
+
+> QueuesResponse ListQueues(ctx).Execute()
+
+
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
+)
+
+func main() {
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	resp, r, err := apiClient.SystemAPI.ListQueues(context.Background()).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `SystemAPI.ListQueues``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+	// response from `ListQueues`: QueuesResponse
+	fmt.Fprintf(os.Stdout, "Response from `SystemAPI.ListQueues`: %v\n", resp)
+}
+```
+
+### Path Parameters
+
+This endpoint does not need any parameter.
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiListQueuesRequest struct via the builder pattern
+
+
+### Return type
+
+[**QueuesResponse**](QueuesResponse.md)
 
 ### Authorization
 

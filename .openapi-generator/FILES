@@ -1,8 +1,4 @@
 .gitignore
-.openapi-generator-ignore
-.travis.yml
-FACADE.md
-README.md
 api/openapi.yaml
 api_cron.go
 api_dlq.go
@@ -47,6 +43,8 @@ docs/ListJobsResponse.md
 docs/ListWorkflowsResponse.md
 docs/OnFailure.md
 docs/OnSuccess.md
+docs/QueueStats.md
+docs/QueuesResponse.md
 docs/ReadyStatus.md
 docs/ReplayDeadLetterResponse.md
 docs/StatsSnapshot.md
@@ -62,7 +60,6 @@ docs/WorkflowStepState.md
 docs/WorkflowStepStatesResponse.md
 docs/WorkflowsAPI.md
 facade.go
-git_push.sh
 go.mod
 go.sum
 model_backoff_strategy.go
@@ -95,6 +92,8 @@ model_list_jobs_response.go
 model_list_workflows_response.go
 model_on_failure.go
 model_on_success.go
+model_queue_stats.go
+model_queues_response.go
 model_ready_status.go
 model_replay_dead_letter_response.go
 model_stats_snapshot.go

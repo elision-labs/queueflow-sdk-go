@@ -34,6 +34,18 @@ func Test_queueflow_SystemAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test SystemAPIService ListQueues", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		resp, httpRes, err := apiClient.SystemAPI.ListQueues(context.Background()).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 	t.Run("Test SystemAPIService ListTasks", func(t *testing.T) {
 
 		t.Skip("skip test")  // remove to run test

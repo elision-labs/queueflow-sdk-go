@@ -9,7 +9,7 @@ info:
     name: MIT
     url: https://opensource.org/licenses/MIT
   title: QueueFlow API
-  version: 1.0.0
+  version: 0.3.0
 servers:
 - description: Local development
   url: http://localhost:8000
@@ -973,6 +973,23 @@ paths:
       - bearerAuth: []
       tags:
       - worker
+  /api/v1/queues:
+    get:
+      operationId: listQueues
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuesResponse'
+          description: "Live backlog per queue for the caller's tenant: claimable\
+            \ (`pending`), waiting for a future run time (`scheduled`), and `running`\
+            \ counts, plus how long the oldest claimable job has waited. Queues with\
+            \ no non-terminal jobs are omitted."
+      security:
+      - bearerAuth: []
+      tags:
+      - system
   /api/v1/queues/{queue}/lease:
     post:
       operationId: leaseJobs
@@ -1024,9 +1041,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatsSnapshot'
-          description: "Engine counters. Process-local and reset on restart: in a\
-            \ split api/worker deployment this reflects only the process serving the\
-            \ request; query the database for fleet-wide history."
+          description: "Durable counts for the caller's tenant, read from the store:\
+            \ jobs in the store (`jobs_created`), jobs completed / failed, the sum\
+            \ of retries, dead letters, and the same for workflows. Fleet-wide and\
+            \ restart-safe, but retention deletes history, so counts can go down.\
+            \ Process-local engine counters are exposed on the Prometheus metrics\
+            \ port instead."
       security:
       - bearerAuth: []
       tags:
@@ -2577,6 +2597,75 @@ components:
       enum:
       - continue
       type: string
+    QueueStats:
+      description: |-
+        Live, per-queue backlog figures read from the store: what an operator
+        watches to decide whether to add workers. Only non-terminal jobs are
+        counted, so the query stays cheap on a large history table. Durable
+        totals live in [`StatsSnapshot`] via `JobStore::count_stats`.
+      example:
+        running: 0
+        scheduled: 0
+        pending: 0
+        oldest_pending_age_secs: 0
+        queue: queue
+      properties:
+        oldest_pending_age_secs:
+          description: |-
+            Seconds the oldest claimable job has been waiting, `None` when nothing
+            is claimable. The queue's primary health signal: it grows when workers
+            cannot keep up and stays near zero when they can.
+          format: int64
+          minimum: 0
+          nullable: true
+          type: integer
+        pending:
+          description: "Claimable now: `pending` or `retrying` with `scheduled_at`\
+            \ in the past."
+          format: int64
+          minimum: 0
+          type: integer
+        queue:
+          type: string
+        running:
+          description: Currently leased by a worker.
+          format: int64
+          minimum: 0
+          type: integer
+        scheduled:
+          description: Waiting for a future `scheduled_at` (a `run_at` job or a backoff
+            retry).
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - pending
+      - queue
+      - running
+      - scheduled
+    QueuesResponse:
+      example:
+        queues:
+        - running: 0
+          scheduled: 0
+          pending: 0
+          oldest_pending_age_secs: 0
+          queue: queue
+        - running: 0
+          scheduled: 0
+          pending: 0
+          oldest_pending_age_secs: 0
+          queue: queue
+      properties:
+        queues:
+          description: |-
+            One entry per queue that currently has non-terminal jobs, sorted by
+            name.
+          items:
+            $ref: '#/components/schemas/QueueStats'
+          type: array
+      required:
+      - queues
     ReadyStatus:
       example:
         status: status

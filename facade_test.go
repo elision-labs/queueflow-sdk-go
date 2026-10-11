@@ -3,19 +3,26 @@ Tests for the hand-written facade.
 
 The generated core is covered by codegen and the spec drift guard; these
 exercise only the ergonomics injected on top of it: DAG validation that must
-fail before any round-trip, the create-then-fetch pairing, and the polling loop
-that turns a sequence of responses into a terminal record or a timeout. The
-transport is a stdlib httptest server, so nothing here needs a live QueueFlow.
+fail before any round-trip, request shaping (options, headers, filters), the
+polling loop that turns a sequence of responses into a terminal record or a
+timeout, typed errors, the timeout split between regular and lease calls, and
+the worker runtime (lease, heartbeat, complete, fail, lost lease, stop and
+drain). The transport is a stdlib httptest server, so nothing here needs a
+live QueueFlow.
 */
 
 package queueflow
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,16 +41,21 @@ func newTestQueueFlow(t *testing.T, handler http.HandlerFunc) *QueueFlow {
 // non-omitempty field, so these fixtures carry the full required set rather
 // than a convenient subset.
 func jobJSON(id string, status JobStatus) string {
+	return jobJSONTask(id, "echo", status)
+}
+
+func jobJSONTask(id, task string, status JobStatus) string {
 	return fmt.Sprintf(`{
 		"id":%q,
-		"task_name":"echo",
+		"task_name":%q,
 		"status":%q,
 		"queue_name":"default",
+		"payload":{"n":1},
 		"retry_count":0,
 		"created_at":"2026-01-01T00:00:00Z",
 		"scheduled_at":"2026-01-01T00:00:00Z",
 		"config":{"max_retries":3,"priority":0,"retry_delay_secs":1,"retry_max_delay_secs":60,"timeout_secs":300}
-	}`, id, status)
+	}`, id, task, status)
 }
 
 func workflowJSON(id string, status WorkflowStatus) string {
@@ -54,6 +66,15 @@ func workflowJSON(id string, status WorkflowStatus) string {
 		"steps":[{"name":"a","task_name":"task"}],
 		"created_at":"2026-01-01T00:00:00Z"
 	}`, id, status)
+}
+
+func decodeBody(t *testing.T, r *http.Request) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil && err != io.EOF {
+		t.Errorf("decoding request body: %v", err)
+	}
+	return m
 }
 
 // --- WorkflowBuilder validation -------------------------------------------
@@ -158,35 +179,145 @@ func TestWorkflowBuilderAcceptsDiamond(t *testing.T) {
 	}
 }
 
-// --- CreateJob -------------------------------------------------------------
+// StepWithOptions must put every per-step option into the wire shape, and the
+// builder-level Context/Metadata must merge across calls.
+func TestWorkflowBuilderStepOptionsAndContext(t *testing.T) {
+	cfg := JobConfig{MaxRetries: PtrInt32(5)}
+	body, err := NewWorkflowBuilder("etl").
+		StepWithOptions("extract", "fetch", StepOptions{Payload: map[string]interface{}{"n": 1}}).
+		StepWithOptions("load", "upsert", StepOptions{
+			After:     []string{"extract"},
+			Config:    &cfg,
+			OnFailure: ONFAILURE_CONTINUE,
+			OnSuccess: ONSUCCESS_CONTINUE,
+			Metadata:  map[string]interface{}{"owner": "data"},
+		}).
+		Context(map[string]interface{}{"a": 1}).
+		Context(map[string]interface{}{"b": 2}).
+		Metadata(map[string]interface{}{"source": "test"}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	steps := got["steps"].([]any)
+	first := steps[0].(map[string]any)
+	if first["payload"].(map[string]any)["n"] != float64(1) {
+		t.Errorf("extract.payload = %v", first["payload"])
+	}
+	if _, present := first["on_failure"]; present {
+		t.Errorf("extract.on_failure should be omitted when unset, got %v", first["on_failure"])
+	}
+	second := steps[1].(map[string]any)
+	if second["on_failure"] != "continue" || second["on_success"] != "continue" {
+		t.Errorf("load policies = %v / %v", second["on_failure"], second["on_success"])
+	}
+	if second["config"].(map[string]any)["max_retries"] != float64(5) {
+		t.Errorf("load.config = %v", second["config"])
+	}
+	if second["metadata"].(map[string]any)["owner"] != "data" {
+		t.Errorf("load.metadata = %v", second["metadata"])
+	}
+	if deps := second["depends_on"].([]any); len(deps) != 1 || deps[0] != "extract" {
+		t.Errorf("load.depends_on = %v", deps)
+	}
+	ctx := got["context"].(map[string]any)
+	if ctx["a"] != float64(1) || ctx["b"] != float64(2) {
+		t.Errorf("context = %v, want both merged keys", ctx)
+	}
+	if got["metadata"].(map[string]any)["source"] != "test" {
+		t.Errorf("metadata = %v", got["metadata"])
+	}
+}
 
-// CreateJob is a create-then-fetch pair: the POST returns only an id, so the
-// facade must follow up with a GET and hand back the full record.
-func TestCreateJobPostsThenFetchesTheRecord(t *testing.T) {
-	var posted map[string]any
-	var gotAuth string
-	var paths []string
+// --- Client construction ---------------------------------------------------
 
-	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.Method+" "+r.URL.Path)
-		gotAuth = r.Header.Get("Authorization")
+func TestNewQueueFlowWithOptionsValidates(t *testing.T) {
+	if _, err := NewQueueFlowWithOptions(Options{Token: "t"}); err == nil {
+		t.Error("expected an error for a missing BaseURL")
+	}
+	if _, err := NewQueueFlowWithOptions(Options{BaseURL: "http://x"}); err == nil {
+		t.Error("expected an error for a missing Token")
+	}
+	qf, err := NewQueueFlowWithOptions(Options{BaseURL: "http://x/", Token: "t", Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qf.Timeout() != 5*time.Second {
+		t.Errorf("Timeout = %s, want 5s", qf.Timeout())
+	}
+	if NewQueueFlow("http://x", "t").Timeout() != DefaultTimeout {
+		t.Error("default timeout not applied")
+	}
+}
+
+// Tenant routes carry the tenant token, worker routes the worker token.
+func TestWorkerRoutesUseTheWorkerToken(t *testing.T) {
+	var mu sync.Mutex
+	auth := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth[r.URL.Path] = r.Header.Get("Authorization")
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost {
-			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
-				t.Errorf("decoding request body: %v", err)
-			}
-			fmt.Fprint(w, `{"job_id":"job-1"}`)
+		if strings.HasSuffix(r.URL.Path, "/lease") {
+			fmt.Fprint(w, `{"jobs":[]}`)
 			return
 		}
 		fmt.Fprint(w, jobJSON("job-1", JOBSTATUS_PENDING))
+	}))
+	t.Cleanup(srv.Close)
+	qf, err := NewQueueFlowWithOptions(Options{BaseURL: srv.URL + "/", Token: "tenant", WorkerToken: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := qf.GetJob(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qf.LeaseJobs(ctx, "q", LeaseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if auth["/api/v1/jobs/job-1"] != "Bearer tenant" {
+		t.Errorf("tenant route auth = %q", auth["/api/v1/jobs/job-1"])
+	}
+	if auth["/api/v1/queues/q/lease"] != "Bearer worker" {
+		t.Errorf("worker route auth = %q", auth["/api/v1/queues/q/lease"])
+	}
+}
+
+// --- CreateJob -------------------------------------------------------------
+
+// CreateJob returns the id the server handed back and sends only what was set.
+func TestCreateJobPostsAndReturnsTheId(t *testing.T) {
+	var posted map[string]any
+	var gotAuth, gotKey string
+
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/jobs" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotKey = r.Header.Get("Idempotency-Key")
+		posted = decodeBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"job_id":"job-1"}`)
 	})
 
-	job, err := qf.CreateJob("echo", map[string]interface{}{"hi": 1})
+	id, err := qf.CreateJob(context.Background(), "echo", map[string]interface{}{"hi": 1})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if job.Id != "job-1" {
-		t.Errorf("Id = %q, want %q", job.Id, "job-1")
+	if id != "job-1" {
+		t.Errorf("id = %q, want %q", id, "job-1")
 	}
 	if posted["task_name"] != "echo" {
 		t.Errorf("task_name = %v, want echo", posted["task_name"])
@@ -194,11 +325,66 @@ func TestCreateJobPostsThenFetchesTheRecord(t *testing.T) {
 	if payload, ok := posted["payload"].(map[string]any); !ok || payload["hi"] != float64(1) {
 		t.Errorf("payload = %v, want {hi: 1}", posted["payload"])
 	}
+	for _, k := range []string{"config", "run_at"} {
+		if _, present := posted[k]; present {
+			t.Errorf("%s should be omitted when unset, got %v", k, posted[k])
+		}
+	}
+	if gotKey != "" {
+		t.Errorf("Idempotency-Key = %q, want none", gotKey)
+	}
 	if gotAuth != "Bearer test-token" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer test-token")
 	}
-	if len(paths) != 2 || !strings.HasPrefix(paths[0], "POST") || !strings.HasPrefix(paths[1], "GET") {
-		t.Errorf("request sequence = %v, want a POST then a GET", paths)
+}
+
+// Every option must land in the right wire field, and the key in the header.
+func TestCreateJobWithOptionsSendsEveryField(t *testing.T) {
+	var posted map[string]any
+	var gotKey string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("Idempotency-Key")
+		posted = decodeBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"job_id":"job-1"}`)
+	})
+
+	runAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	_, err := qf.CreateJobWithOptions(context.Background(), "echo", CreateJobOptions{
+		Payload:           map[string]interface{}{"hi": 1},
+		Queue:             "billing",
+		Priority:          PtrInt32(7),
+		MaxRetries:        PtrInt32(2),
+		Timeout:           PtrInt64(45),
+		RetryBackoff:      BACKOFFSTRATEGY_LINEAR,
+		RetryDelaySecs:    PtrInt64(3),
+		RetryMaxDelaySecs: PtrInt64(90),
+		JitterFactor:      PtrFloat64(0.25),
+		IdempotencyKey:    "order-1",
+		RunAt:             &runAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateJobWithOptions: %v", err)
+	}
+	if gotKey != "order-1" {
+		t.Errorf("Idempotency-Key = %q, want order-1", gotKey)
+	}
+	cfg, ok := posted["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("config = %v, want an object", posted["config"])
+	}
+	want := map[string]any{
+		"queue": "billing", "priority": float64(7), "max_retries": float64(2), "timeout": float64(45),
+		"retry_backoff": "linear", "retry_delay_secs": float64(3), "retry_max_delay_secs": float64(90),
+		"jitter_factor": 0.25,
+	}
+	for k, v := range want {
+		if cfg[k] != v {
+			t.Errorf("config.%s = %v, want %v", k, cfg[k], v)
+		}
+	}
+	if !strings.HasPrefix(fmt.Sprint(posted["run_at"]), "2030-01-02T03:04:05") {
+		t.Errorf("run_at = %v, want RFC 3339 of the given instant", posted["run_at"])
 	}
 }
 
@@ -207,16 +393,12 @@ func TestCreateJobPostsThenFetchesTheRecord(t *testing.T) {
 func TestCreateJobOmitsNilPayload(t *testing.T) {
 	var posted map[string]any
 	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		posted = decodeBody(t, r)
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost {
-			json.NewDecoder(r.Body).Decode(&posted)
-			fmt.Fprint(w, `{"job_id":"job-1"}`)
-			return
-		}
-		fmt.Fprint(w, jobJSON("job-1", JOBSTATUS_PENDING))
+		fmt.Fprint(w, `{"job_id":"job-1"}`)
 	})
 
-	if _, err := qf.CreateJob("echo", nil); err != nil {
+	if _, err := qf.CreateJob(context.Background(), "echo", nil); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	if v, present := posted["payload"]; present && v == nil {
@@ -224,19 +406,160 @@ func TestCreateJobOmitsNilPayload(t *testing.T) {
 	}
 }
 
-func TestCreateJobPropagatesServerError(t *testing.T) {
+// Non-2xx responses become *APIError with the status and body attached.
+func TestServerErrorsBecomeAPIError(t *testing.T) {
 	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":"unknown task"}`)
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"no such job"}`)
 	})
 
-	job, err := qf.CreateJob("nope", nil)
+	job, err := qf.GetJob(context.Background(), "missing")
 	if err == nil {
 		t.Fatalf("expected an error, got job %+v", job)
 	}
-	if job != nil {
-		t.Errorf("job = %+v, want nil alongside the error", job)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error %T is not an *APIError: %v", err, err)
+	}
+	if apiErr.Status != 404 || StatusCode(err) != 404 {
+		t.Errorf("Status = %d, StatusCode = %d, want 404", apiErr.Status, StatusCode(err))
+	}
+	if apiErr.Op != "GetJob" || !strings.Contains(string(apiErr.Body), "no such job") {
+		t.Errorf("Op = %q, Body = %q", apiErr.Op, apiErr.Body)
+	}
+	if !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "no such job") {
+		t.Errorf("Error() = %q", err)
+	}
+	var g *GenericOpenAPIError
+	if !errors.As(err, &g) {
+		t.Error("the generated error should remain reachable through Unwrap")
+	}
+}
+
+// Transport failures (here: a cancelled context) are not APIErrors.
+func TestContextCancellationIsNotAnAPIError(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := qf.GetJob(ctx, "job-1")
+	if err == nil {
+		t.Fatal("expected a deadline error")
+	}
+	if StatusCode(err) != 0 {
+		t.Errorf("StatusCode = %d, want 0 for a transport error", StatusCode(err))
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+}
+
+// The per-request timeout applies to regular calls but not to the lease long
+// poll, which gets wait_secs plus 35 seconds instead.
+func TestLeaseCallOutlivesTheRequestTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/lease") {
+			fmt.Fprint(w, `{"jobs":[]}`)
+			return
+		}
+		fmt.Fprint(w, jobJSON("job-1", JOBSTATUS_PENDING))
+	}))
+	t.Cleanup(srv.Close)
+	qf, err := NewQueueFlowWithOptions(Options{BaseURL: srv.URL, Token: "t", Timeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qf.GetJob(context.Background(), "job-1"); err == nil {
+		t.Error("GetJob should have hit the 50ms timeout")
+	}
+	if _, err := qf.LeaseJobs(context.Background(), "q", LeaseOptions{WaitSecs: 1}); err != nil {
+		t.Errorf("LeaseJobs should not be bound by the 50ms timeout: %v", err)
+	}
+}
+
+// --- Lists -----------------------------------------------------------------
+
+// Set filters are forwarded as query parameters; unset ones are omitted.
+func TestListJobsForwardsFilters(t *testing.T) {
+	var query string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"jobs":[],"limit":50,"offset":0,"has_more":false}`)
+	})
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := qf.ListJobs(context.Background(), ListOptions{Status: "failed", Queue: "billing", Limit: 50, Cursor: "abc", CreatedAfter: &after})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	for _, want := range []string{"status=failed", "queue=billing", "limit=50", "cursor=abc", "created_after=2026-01-01"} {
+		if !strings.Contains(query, want) {
+			t.Errorf("query %q lacks %q", query, want)
+		}
+	}
+	for _, absent := range []string{"offset=", "order_by=", "include_total=", "created_before="} {
+		if strings.Contains(query, absent) {
+			t.Errorf("query %q should not carry %q", query, absent)
+		}
+	}
+}
+
+func TestQueuesAndTasksUnwrapTheirEnvelopes(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/queues":
+			fmt.Fprint(w, `{"queues":[{"queue":"default","pending":2,"scheduled":0,"running":1,"oldest_pending_age_secs":12}]}`)
+		case "/api/v1/tasks":
+			fmt.Fprint(w, `{"tasks":["echo","sleep"]}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+	queues, err := qf.Queues(context.Background())
+	if err != nil {
+		t.Fatalf("Queues: %v", err)
+	}
+	if len(queues) != 1 || queues[0].Queue != "default" || queues[0].Pending != 2 {
+		t.Errorf("queues = %+v", queues)
+	}
+	tasks, err := qf.Tasks(context.Background())
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	if len(tasks) != 2 || tasks[1] != "sleep" {
+		t.Errorf("tasks = %v", tasks)
+	}
+}
+
+// --- Cron ------------------------------------------------------------------
+
+func TestCreateCronWithOptionsSendsQueueAndPayload(t *testing.T) {
+	var posted map[string]any
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		posted = decodeBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"cron_id":"c1"}`)
+	})
+	id, err := qf.CreateCronWithOptions(context.Background(), "nightly", "0 3 * * *", "report", CreateCronOptions{
+		Payload: map[string]interface{}{"from": "cron"},
+		Queue:   "reports",
+	})
+	if err != nil {
+		t.Fatalf("CreateCronWithOptions: %v", err)
+	}
+	if id != "c1" {
+		t.Errorf("id = %q", id)
+	}
+	if posted["name"] != "nightly" || posted["cron_expr"] != "0 3 * * *" || posted["task_name"] != "report" {
+		t.Errorf("posted = %v", posted)
+	}
+	if posted["queue"] != "reports" || posted["payload"].(map[string]any)["from"] != "cron" {
+		t.Errorf("queue/payload = %v / %v", posted["queue"], posted["payload"])
 	}
 }
 
@@ -258,7 +581,7 @@ func TestWaitForJobPollsUntilTerminal(t *testing.T) {
 		fmt.Fprint(w, jobJSON("job-1", statuses[idx]))
 	})
 
-	job, err := qf.WaitForJob("job-1", 5*time.Second, time.Millisecond)
+	job, err := qf.WaitForJob(context.Background(), "job-1", WaitOptions{Timeout: 5 * time.Second, Interval: time.Millisecond})
 	if err != nil {
 		t.Fatalf("WaitForJob: %v", err)
 	}
@@ -279,7 +602,7 @@ func TestWaitForJobReturnsFailureStates(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, jobJSON("job-1", status))
 			})
-			job, err := qf.WaitForJob("job-1", time.Second, time.Millisecond)
+			job, err := qf.WaitForJob(context.Background(), "job-1", WaitOptions{Timeout: time.Second, Interval: time.Millisecond})
 			if err != nil {
 				t.Fatalf("WaitForJob(%s): %v", status, err)
 			}
@@ -299,16 +622,33 @@ func TestWaitForJobTimesOutOnNonTerminalStatus(t *testing.T) {
 	})
 
 	start := time.Now()
-	job, err := qf.WaitForJob("job-1", 50*time.Millisecond, 10*time.Millisecond)
+	job, err := qf.WaitForJob(context.Background(), "job-1", WaitOptions{Timeout: 50 * time.Millisecond, Interval: 10 * time.Millisecond})
 	if err == nil {
 		t.Fatalf("expected a timeout, got job %+v", job)
 	}
-	if !strings.Contains(err.Error(), "did not finish within") {
-		t.Errorf("error = %q, want a timeout message", err)
+	if !errors.Is(err, ErrTimeout) {
+		t.Errorf("error = %q, want it to wrap ErrTimeout", err)
 	}
 	// The loop must give up near the deadline rather than sleeping past it.
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("took %s to time out on a 50ms deadline", elapsed)
+	}
+}
+
+// A cancelled context ends the wait with ctx.Err(), not a timeout.
+func TestWaitForJobHonoursContext(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jobJSON("job-1", JOBSTATUS_RUNNING))
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_, err := qf.WaitForJob(ctx, "job-1", WaitOptions{Timeout: 10 * time.Second, Interval: 5 * time.Millisecond})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 
@@ -317,8 +657,8 @@ func TestWaitForJobPropagatesFetchError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
-	if _, err := qf.WaitForJob("job-1", time.Second, time.Millisecond); err == nil {
-		t.Fatal("expected the fetch error to propagate, got nil")
+	if _, err := qf.WaitForJob(context.Background(), "job-1", WaitOptions{Timeout: time.Second, Interval: time.Millisecond}); StatusCode(err) != 500 {
+		t.Fatalf("expected the 500 to propagate, got %v", err)
 	}
 }
 
@@ -334,7 +674,7 @@ func TestCreateWorkflowValidatesBeforeSending(t *testing.T) {
 	})
 
 	cyclic := NewWorkflowBuilder("etl").Step("a", "task", "b").Step("b", "task", "a")
-	if _, err := qf.CreateWorkflow(cyclic); err == nil {
+	if _, err := qf.CreateWorkflow(context.Background(), cyclic); err == nil {
 		t.Fatal("expected a validation error for a cyclic DAG")
 	}
 	if got := atomic.LoadInt32(&called); got != 0 {
@@ -342,27 +682,35 @@ func TestCreateWorkflowValidatesBeforeSending(t *testing.T) {
 	}
 }
 
-func TestCreateWorkflowPostsThenFetchesTheRecord(t *testing.T) {
-	var paths []string
+func TestCreateWorkflowReturnsTheId(t *testing.T) {
 	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.Method)
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost {
-			fmt.Fprint(w, `{"workflow_id":"wf-1"}`)
-			return
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/workflows" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		fmt.Fprint(w, workflowJSON("wf-1", WORKFLOWSTATUS_CREATED))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"workflow_id":"wf-1"}`)
 	})
 
-	got, err := qf.CreateWorkflow(NewWorkflowBuilder("etl").Step("a", "task"))
+	id, err := qf.CreateWorkflow(context.Background(), NewWorkflowBuilder("etl").Step("a", "task"))
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	if got.Id != "wf-1" {
-		t.Errorf("Id = %q, want %q", got.Id, "wf-1")
+	if id != "wf-1" {
+		t.Errorf("id = %q, want %q", id, "wf-1")
 	}
-	if len(paths) != 2 || paths[0] != http.MethodPost || paths[1] != http.MethodGet {
-		t.Errorf("request sequence = %v, want [POST GET]", paths)
+}
+
+func TestWorkflowStepsUnwrapsTheEnvelope(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"steps":[{"name":"a","status":"completed","job_id":"job-1"},{"name":"b","status":"pending"}]}`)
+	})
+	steps, err := qf.WorkflowSteps(context.Background(), "wf-1")
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	if len(steps) != 2 || steps[0].Status != STEPSTATUS_COMPLETED || steps[1].Name != "b" {
+		t.Errorf("steps = %+v", steps)
 	}
 }
 
@@ -374,7 +722,7 @@ func TestWaitForWorkflowTreatsPartiallyFailedAsTerminal(t *testing.T) {
 		fmt.Fprint(w, workflowJSON("wf-1", WORKFLOWSTATUS_PARTIALLY_FAILED))
 	})
 
-	got, err := qf.WaitForWorkflow("wf-1", time.Second, time.Millisecond)
+	got, err := qf.WaitForWorkflow(context.Background(), "wf-1", WaitOptions{Timeout: time.Second, Interval: time.Millisecond})
 	if err != nil {
 		t.Fatalf("WaitForWorkflow: %v", err)
 	}
@@ -389,7 +737,493 @@ func TestWaitForWorkflowTimesOutWhileRunning(t *testing.T) {
 		fmt.Fprint(w, workflowJSON("wf-1", WORKFLOWSTATUS_RUNNING))
 	})
 
-	if _, err := qf.WaitForWorkflow("wf-1", 50*time.Millisecond, 10*time.Millisecond); err == nil {
-		t.Fatal("expected a timeout while the workflow is still running")
+	if _, err := qf.WaitForWorkflow(context.Background(), "wf-1", WaitOptions{Timeout: 50 * time.Millisecond, Interval: 10 * time.Millisecond}); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected ErrTimeout while the workflow is still running, got %v", err)
+	}
+}
+
+// --- Worker runtime --------------------------------------------------------
+
+// fakeBroker is a scripted worker-protocol server: it hands out the queued
+// leases (honouring max_jobs), then returns empty leases, and records every
+// heartbeat/complete/fail body.
+type fakeBroker struct {
+	t  *testing.T
+	mu sync.Mutex
+
+	pending      []string // job JSON bodies still to be leased
+	leaseStatus  int      // non-zero: every lease call fails with this status
+	leaseFailN   int32    // fail this many lease calls with 500, then serve
+	heartbeat    JobStatus
+	heartbeat409 bool
+
+	leaseBodies []map[string]any
+	heartbeats  []map[string]any
+	completes   map[string]map[string]any
+	fails       map[string]map[string]any
+	auth        map[string]bool
+}
+
+func newFakeBroker(t *testing.T) *fakeBroker {
+	return &fakeBroker{
+		t:         t,
+		heartbeat: JOBSTATUS_RUNNING,
+		completes: map[string]map[string]any{},
+		fails:     map[string]map[string]any{},
+		auth:      map[string]bool{},
+	}
+}
+
+func (b *fakeBroker) enqueue(id, task string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, jobJSONTask(id, task, JOBSTATUS_RUNNING))
+}
+
+func (b *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.auth[r.Header.Get("Authorization")] = true
+	w.Header().Set("Content-Type", "application/json")
+	path := r.URL.Path
+	switch {
+	case strings.HasSuffix(path, "/lease"):
+		if b.leaseStatus != 0 {
+			w.WriteHeader(b.leaseStatus)
+			fmt.Fprint(w, `{"error":"nope"}`)
+			return
+		}
+		if b.leaseFailN > 0 {
+			b.leaseFailN--
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":"flaky"}`)
+			return
+		}
+		body := decodeBody(b.t, r)
+		b.leaseBodies = append(b.leaseBodies, body)
+		max := 1
+		if v, ok := body["max_jobs"].(float64); ok {
+			max = int(v)
+		}
+		var out []string
+		for len(b.pending) > 0 && len(out) < max {
+			out = append(out, fmt.Sprintf(`{"job":%s,"lease_token":"tok"}`, b.pending[0]))
+			b.pending = b.pending[1:]
+		}
+		if len(out) == 0 {
+			// Stand in for the server's long poll so an idle worker does not
+			// spin against the test server.
+			b.mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			b.mu.Lock()
+		}
+		fmt.Fprintf(w, `{"jobs":[%s]}`, strings.Join(out, ","))
+	case strings.HasSuffix(path, "/heartbeat"):
+		b.heartbeats = append(b.heartbeats, decodeBody(b.t, r))
+		if b.heartbeat409 {
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"error":"lease lost"}`)
+			return
+		}
+		fmt.Fprintf(w, `{"status":%q}`, b.heartbeat)
+	case strings.HasSuffix(path, "/complete"):
+		b.completes[jobIDFromPath(path)] = decodeBody(b.t, r)
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasSuffix(path, "/fail"):
+		b.fails[jobIDFromPath(path)] = decodeBody(b.t, r)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		b.t.Errorf("unexpected request %s %s", r.Method, path)
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func jobIDFromPath(path string) string {
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-2]
+}
+
+func (b *fakeBroker) snapshot() (completes, fails map[string]map[string]any, heartbeats, leases []map[string]any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	completes = map[string]map[string]any{}
+	for k, v := range b.completes {
+		completes[k] = v
+	}
+	fails = map[string]map[string]any{}
+	for k, v := range b.fails {
+		fails[k] = v
+	}
+	return completes, fails, append([]map[string]any(nil), b.heartbeats...), append([]map[string]any(nil), b.leaseBodies...)
+}
+
+// runWorker starts Run against the broker and returns a stop function that
+// cancels it and returns Run's error.
+func runWorker(t *testing.T, b *fakeBroker, handlers map[string]Handler, opts WorkerOptions) (*QueueFlow, func() error) {
+	t.Helper()
+	srv := httptest.NewServer(b)
+	t.Cleanup(srv.Close)
+	qf, err := NewQueueFlowWithOptions(Options{BaseURL: srv.URL, Token: "tenant", WorkerToken: "worker-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Logf == nil {
+		opts.Logf = t.Logf
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- qf.Run(ctx, "q", handlers, opts) }()
+	stop := func() error {
+		cancel()
+		select {
+		case err := <-errc:
+			return err
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not return within 10s of cancellation")
+			return nil
+		}
+	}
+	t.Cleanup(func() { cancel() })
+	return qf, stop
+}
+
+// waitUntil polls cond for up to 5 seconds.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// The happy path: lease with the worker token and the configured lease/wait,
+// run the handler, report its result with the lease token.
+func TestRunLeasesRunsAndCompletes(t *testing.T) {
+	b := newFakeBroker(t)
+	b.enqueue("job-1", "send-email")
+	var seen []string
+	var mu sync.Mutex
+	handlers := map[string]Handler{
+		"send-email": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			mu.Lock()
+			seen = append(seen, job.Id)
+			mu.Unlock()
+			return map[string]interface{}{"sent": true, "n": job.Payload["n"]}, nil
+		},
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 10, WaitSecs: 2})
+	waitUntil(t, "completion", func() bool { c, _, _, _ := b.snapshot(); return len(c) == 1 })
+	if err := stop(); err != nil {
+		t.Fatalf("Run returned %v, want nil after cancellation", err)
+	}
+
+	completes, fails, _, leases := b.snapshot()
+	if len(fails) != 0 {
+		t.Errorf("unexpected fail reports: %v", fails)
+	}
+	body := completes["job-1"]
+	if body["lease_token"] != "tok" {
+		t.Errorf("complete.lease_token = %v", body["lease_token"])
+	}
+	if res := body["result"].(map[string]any); res["sent"] != true || res["n"] != float64(1) {
+		t.Errorf("complete.result = %v", res)
+	}
+	if len(leases) == 0 {
+		t.Fatal("no lease call recorded")
+	}
+	if leases[0]["max_jobs"] != float64(1) || leases[0]["lease_secs"] != float64(10) || leases[0]["wait_secs"] != float64(2) {
+		t.Errorf("lease body = %v, want max_jobs 1, lease_secs 10, wait_secs 2", leases[0])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0] != "job-1" {
+		t.Errorf("handled = %v", seen)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.auth["Bearer worker-token"] || b.auth["Bearer tenant"] {
+		t.Errorf("worker routes must use the worker token only; saw %v", b.auth)
+	}
+}
+
+// A plain error is a retryable failure; a NonRetryableError (even wrapped)
+// dead-letters; an unknown task fails non-retryably without running anything.
+func TestRunReportsFailures(t *testing.T) {
+	b := newFakeBroker(t)
+	b.enqueue("job-retry", "flaky")
+	b.enqueue("job-perm", "bad-input")
+	b.enqueue("job-wrapped", "bad-wrapped")
+	b.enqueue("job-ghost", "ghost")
+	handlers := map[string]Handler{
+		"flaky": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return nil, errors.New("upstream 503")
+		},
+		"bad-input": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return nil, NonRetryable(errors.New("malformed order"))
+		},
+		"bad-wrapped": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return nil, fmt.Errorf("validating: %w", NonRetryable(errors.New("bad id")))
+		},
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 10, WaitSecs: 1})
+	waitUntil(t, "four fail reports", func() bool { _, f, _, _ := b.snapshot(); return len(f) == 4 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	completes, fails, _, _ := b.snapshot()
+	if len(completes) != 0 {
+		t.Errorf("unexpected completions: %v", completes)
+	}
+	check := func(id string, retryable bool, msg string) {
+		f := fails[id]
+		if f["lease_token"] != "tok" {
+			t.Errorf("%s: lease_token = %v", id, f["lease_token"])
+		}
+		if f["retryable"] != retryable {
+			t.Errorf("%s: retryable = %v, want %v", id, f["retryable"], retryable)
+		}
+		if !strings.Contains(fmt.Sprint(f["error"]), msg) {
+			t.Errorf("%s: error = %v, want it to contain %q", id, f["error"], msg)
+		}
+	}
+	check("job-retry", true, "upstream 503")
+	check("job-perm", false, "malformed order")
+	check("job-wrapped", false, "bad id")
+	check("job-ghost", false, "no handler for task")
+}
+
+// A panicking handler is a retryable failure, not a dead worker.
+func TestRunRecoversHandlerPanics(t *testing.T) {
+	b := newFakeBroker(t)
+	b.enqueue("job-1", "boom")
+	handlers := map[string]Handler{
+		"boom": func(ctx context.Context, job *Job) (map[string]interface{}, error) { panic("kaboom") },
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 10, WaitSecs: 1})
+	waitUntil(t, "fail report", func() bool { _, f, _, _ := b.snapshot(); return len(f) == 1 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	_, fails, _, _ := b.snapshot()
+	if f := fails["job-1"]; f["retryable"] != true || !strings.Contains(fmt.Sprint(f["error"]), "kaboom") {
+		t.Errorf("fail = %v", f)
+	}
+}
+
+// Heartbeats go out at half the lease interval with the lease token and the
+// lease length; a lost lease (409, or a non-running status) cancels the
+// handler's context and suppresses the outcome report.
+func TestRunHeartbeatsAndAbandonsLostLeases(t *testing.T) {
+	for _, mode := range []string{"409", "cancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			b := newFakeBroker(t)
+			if mode == "409" {
+				b.heartbeat409 = true
+			} else {
+				b.heartbeat = JOBSTATUS_CANCELLED
+			}
+			b.enqueue("job-1", "slow")
+			var ctxErr error
+			done := make(chan struct{})
+			handlers := map[string]Handler{
+				"slow": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+					<-ctx.Done()
+					ctxErr = ctx.Err()
+					close(done)
+					return map[string]interface{}{"late": true}, nil
+				},
+			}
+			// LeaseSecs 2 => heartbeat every second.
+			_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 2, WaitSecs: 1})
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler context was not cancelled after the lost-lease heartbeat")
+			}
+			if err := stop(); err != nil {
+				t.Fatal(err)
+			}
+			if ctxErr != context.Canceled {
+				t.Errorf("handler ctx.Err() = %v, want Canceled", ctxErr)
+			}
+			completes, fails, heartbeats, _ := b.snapshot()
+			if len(heartbeats) == 0 {
+				t.Fatal("no heartbeat recorded")
+			}
+			if heartbeats[0]["lease_token"] != "tok" || heartbeats[0]["extend_secs"] != float64(2) {
+				t.Errorf("heartbeat body = %v", heartbeats[0])
+			}
+			if len(completes) != 0 || len(fails) != 0 {
+				t.Errorf("nothing may be reported after a lost lease; got completes=%v fails=%v", completes, fails)
+			}
+		})
+	}
+}
+
+// Cancelling Run's context stops leasing but lets in-flight handlers finish
+// and report within the drain window.
+func TestRunStopDrainsInFlightJobs(t *testing.T) {
+	b := newFakeBroker(t)
+	b.enqueue("job-1", "slow")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handlers := map[string]Handler{
+		"slow": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			close(started)
+			<-release
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return map[string]interface{}{"drained": true}, nil
+		},
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 10, WaitSecs: 1, DrainTimeout: 5 * time.Second})
+	<-started
+	errc := make(chan error, 1)
+	go func() { errc <- stop() }()
+	select {
+	case err := <-errc:
+		t.Fatalf("Run returned (%v) before the in-flight handler finished", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	completes, _, _, _ := b.snapshot()
+	if completes["job-1"] == nil || completes["job-1"]["result"].(map[string]any)["drained"] != true {
+		t.Errorf("drained job was not reported complete: %v", completes)
+	}
+}
+
+// Past the drain timeout the handler's context is cancelled and Run returns;
+// the job is left to the server (nothing reported).
+func TestRunDrainTimeoutCancelsHandlers(t *testing.T) {
+	b := newFakeBroker(t)
+	b.enqueue("job-1", "stuck")
+	started := make(chan struct{})
+	ctxDone := make(chan struct{})
+	handlers := map[string]Handler{
+		"stuck": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			close(started)
+			<-ctx.Done()
+			close(ctxDone)
+			return nil, ctx.Err()
+		},
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{LeaseSecs: 10, WaitSecs: 1, DrainTimeout: 100 * time.Millisecond})
+	<-started
+	begin := time.Now()
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begin); elapsed > 3*time.Second {
+		t.Errorf("Run took %s to give up on a 100ms drain timeout", elapsed)
+	}
+	select {
+	case <-ctxDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler context was not cancelled at the drain timeout")
+	}
+	time.Sleep(50 * time.Millisecond) // let any (wrong) report land
+	completes, fails, _, _ := b.snapshot()
+	if len(completes)+len(fails) != 0 {
+		t.Errorf("a drain-cancelled job must not be reported; got completes=%v fails=%v", completes, fails)
+	}
+}
+
+// 401/403 on lease are fatal: Run returns the error instead of retrying.
+func TestRunReturnsOnAuthFailure(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			b := newFakeBroker(t)
+			b.leaseStatus = status
+			srv := httptest.NewServer(b)
+			t.Cleanup(srv.Close)
+			qf := NewQueueFlow(srv.URL, "t")
+			errc := make(chan error, 1)
+			go func() { errc <- qf.Run(context.Background(), "q", map[string]Handler{}, WorkerOptions{Logf: t.Logf}) }()
+			select {
+			case err := <-errc:
+				if StatusCode(err) != status {
+					t.Errorf("Run returned %v, want an APIError with status %d", err, status)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Run kept retrying a fatal auth error")
+			}
+		})
+	}
+}
+
+// Transient lease errors back off one second, are reported through OnError,
+// and do not stop the loop.
+func TestRunBacksOffOnLeaseErrors(t *testing.T) {
+	b := newFakeBroker(t)
+	b.leaseFailN = 2
+	b.enqueue("job-1", "echo")
+	var reported int32
+	handlers := map[string]Handler{
+		"echo": func(ctx context.Context, job *Job) (map[string]interface{}, error) { return nil, nil },
+	}
+	begin := time.Now()
+	_, stop := runWorker(t, b, handlers, WorkerOptions{WaitSecs: 1, OnError: func(err error) {
+		atomic.AddInt32(&reported, 1)
+		if StatusCode(err) != 500 {
+			t.Errorf("OnError got %v, want a 500", err)
+		}
+	}})
+	waitUntil(t, "completion after backoff", func() bool { c, _, _, _ := b.snapshot(); return len(c) == 1 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&reported); got != 2 {
+		t.Errorf("OnError called %d times, want 2", got)
+	}
+	if elapsed := time.Since(begin); elapsed < 2*time.Second {
+		t.Errorf("two failures should have cost two 1s backoffs, took %s", elapsed)
+	}
+}
+
+// With Concurrency N the lease asks for N jobs and runs them at the same time.
+func TestRunLeasesAndRunsConcurrently(t *testing.T) {
+	b := newFakeBroker(t)
+	for i := 1; i <= 3; i++ {
+		b.enqueue(fmt.Sprintf("job-%d", i), "barrier")
+	}
+	var wg sync.WaitGroup
+	wg.Add(3)
+	allStarted := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allStarted)
+	}()
+	handlers := map[string]Handler{
+		"barrier": func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			wg.Done()
+			// Only returns once every job is in flight at the same time.
+			select {
+			case <-allStarted:
+				return map[string]interface{}{}, nil
+			case <-time.After(3 * time.Second):
+				return nil, errors.New("the other handlers never started: not concurrent")
+			}
+		},
+	}
+	_, stop := runWorker(t, b, handlers, WorkerOptions{Concurrency: 3, LeaseSecs: 10, WaitSecs: 1})
+	waitUntil(t, "three completions", func() bool { c, _, _, _ := b.snapshot(); return len(c) == 3 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	_, fails, _, leases := b.snapshot()
+	if len(fails) != 0 {
+		t.Errorf("handlers did not overlap: %v", fails)
+	}
+	if leases[0]["max_jobs"] != float64(3) {
+		t.Errorf("first lease max_jobs = %v, want 3 (all slots free)", leases[0]["max_jobs"])
 	}
 }
