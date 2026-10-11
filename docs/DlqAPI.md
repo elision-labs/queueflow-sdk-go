@@ -7,6 +7,7 @@ Method | HTTP request | Description
 [**GetDeadLetter**](DlqAPI.md#GetDeadLetter) | **Get** /api/v1/dlq/{id} | 
 [**ListDeadLetters**](DlqAPI.md#ListDeadLetters) | **Get** /api/v1/dlq | 
 [**ReplayDeadLetter**](DlqAPI.md#ReplayDeadLetter) | **Post** /api/v1/dlq/{id}/replay | 
+[**ReplayDeadLetters**](DlqAPI.md#ReplayDeadLetters) | **Post** /api/v1/dlq/replay | 
 
 
 
@@ -80,7 +81,7 @@ Name | Type | Description  | Notes
 
 ## ListDeadLetters
 
-> ListDeadLettersResponse ListDeadLetters(ctx).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
+> ListDeadLettersResponse ListDeadLetters(ctx).Status(status).Queue(queue).TaskName(taskName).Replayed(replayed).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 
 
 
@@ -100,6 +101,8 @@ import (
 func main() {
 	status := "status_example" // string | Filter by status (e.g. `pending`, `completed`). (optional)
 	queue := "queue_example" // string | Filter by queue name (jobs only). (optional)
+	taskName := "taskName_example" // string | Filter by task name (jobs and dead letters). (optional)
+	replayed := true // bool | Dead letters only: `false` lists entries not yet replayed, `true` the replayed ones; both when omitted. (optional)
 	limit := int64(789) // int64 | Page size, 1..=100 (default 50). (optional)
 	offset := int64(789) // int64 | Number of records to skip (default 0). (optional)
 	orderBy := "orderBy_example" // string | `created_at ASC` or `created_at DESC` (default DESC). (optional)
@@ -110,7 +113,7 @@ func main() {
 
 	configuration := openapiclient.NewConfiguration()
 	apiClient := openapiclient.NewAPIClient(configuration)
-	resp, r, err := apiClient.DlqAPI.ListDeadLetters(context.Background()).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
+	resp, r, err := apiClient.DlqAPI.ListDeadLetters(context.Background()).Status(status).Queue(queue).TaskName(taskName).Replayed(replayed).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error when calling `DlqAPI.ListDeadLetters``: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
@@ -133,6 +136,8 @@ Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **status** | **string** | Filter by status (e.g. &#x60;pending&#x60;, &#x60;completed&#x60;). | 
  **queue** | **string** | Filter by queue name (jobs only). | 
+ **taskName** | **string** | Filter by task name (jobs and dead letters). | 
+ **replayed** | **bool** | Dead letters only: &#x60;false&#x60; lists entries not yet replayed, &#x60;true&#x60; the replayed ones; both when omitted. | 
  **limit** | **int64** | Page size, 1..&#x3D;100 (default 50). | 
  **offset** | **int64** | Number of records to skip (default 0). | 
  **orderBy** | **string** | &#x60;created_at ASC&#x60; or &#x60;created_at DESC&#x60; (default DESC). | 
@@ -220,6 +225,70 @@ Name | Type | Description  | Notes
 ### HTTP request headers
 
 - **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## ReplayDeadLetters
+
+> ReplayDeadLettersResponse ReplayDeadLetters(ctx).ReplayDeadLettersRequest(replayDeadLettersRequest).Execute()
+
+
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
+)
+
+func main() {
+	replayDeadLettersRequest := *openapiclient.NewReplayDeadLettersRequest() // ReplayDeadLettersRequest | 
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	resp, r, err := apiClient.DlqAPI.ReplayDeadLetters(context.Background()).ReplayDeadLettersRequest(replayDeadLettersRequest).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `DlqAPI.ReplayDeadLetters``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+	// response from `ReplayDeadLetters`: ReplayDeadLettersResponse
+	fmt.Fprintf(os.Stdout, "Response from `DlqAPI.ReplayDeadLetters`: %v\n", resp)
+}
+```
+
+### Path Parameters
+
+
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiReplayDeadLettersRequest struct via the builder pattern
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **replayDeadLettersRequest** | [**ReplayDeadLettersRequest**](ReplayDeadLettersRequest.md) |  | 
+
+### Return type
+
+[**ReplayDeadLettersResponse**](ReplayDeadLettersResponse.md)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: application/json
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)

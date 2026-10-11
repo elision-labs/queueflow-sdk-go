@@ -62,4 +62,16 @@ func Test_queueflow_DlqAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test DlqAPIService ReplayDeadLetters", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		resp, httpRes, err := apiClient.DlqAPI.ReplayDeadLetters(context.Background()).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 }

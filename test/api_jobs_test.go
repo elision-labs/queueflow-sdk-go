@@ -35,6 +35,18 @@ func Test_queueflow_JobsAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test JobsAPIService CancelJobs", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		resp, httpRes, err := apiClient.JobsAPI.CancelJobs(context.Background()).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 	t.Run("Test JobsAPIService CreateBatchJobs", func(t *testing.T) {
 
 		t.Skip("skip test")  // remove to run test

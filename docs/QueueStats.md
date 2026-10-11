@@ -5,6 +5,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **OldestPendingAgeSecs** | Pointer to **NullableInt64** | Seconds the oldest claimable job has been waiting, &#x60;None&#x60; when nothing is claimable. The queue&#39;s primary health signal: it grows when workers cannot keep up and stays near zero when they can. | [optional] 
+**Paused** | Pointer to **bool** | Claims for this tenant&#39;s jobs on the queue are paused (see &#x60;POST /api/v1/queues/{queue}/pause&#x60;). Pending jobs accumulate; running ones finish. In the all-tenants view this is true only when every registered tenant of the queue is paused. | [optional] 
 **Pending** | **int64** | Claimable now: &#x60;pending&#x60; or &#x60;retrying&#x60; with &#x60;scheduled_at&#x60; in the past. | 
 **Queue** | **string** |  | 
 **Running** | **int64** | Currently leased by a worker. | 
@@ -64,6 +65,31 @@ HasOldestPendingAgeSecs returns a boolean if a field has been set.
 `func (o *QueueStats) UnsetOldestPendingAgeSecs()`
 
 UnsetOldestPendingAgeSecs ensures that no value is present for OldestPendingAgeSecs, not even an explicit nil
+### GetPaused
+
+`func (o *QueueStats) GetPaused() bool`
+
+GetPaused returns the Paused field if non-nil, zero value otherwise.
+
+### GetPausedOk
+
+`func (o *QueueStats) GetPausedOk() (*bool, bool)`
+
+GetPausedOk returns a tuple with the Paused field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetPaused
+
+`func (o *QueueStats) SetPaused(v bool)`
+
+SetPaused sets Paused field to given value.
+
+### HasPaused
+
+`func (o *QueueStats) HasPaused() bool`
+
+HasPaused returns a boolean if a field has been set.
+
 ### GetPending
 
 `func (o *QueueStats) GetPending() int64`

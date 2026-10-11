@@ -58,4 +58,44 @@ func Test_queueflow_SystemAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test SystemAPIService PauseQueue", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var queue string
+
+		resp, httpRes, err := apiClient.SystemAPI.PauseQueue(context.Background(), queue).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
+	t.Run("Test SystemAPIService ResumeQueue", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var queue string
+
+		resp, httpRes, err := apiClient.SystemAPI.ResumeQueue(context.Background(), queue).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
+	t.Run("Test SystemAPIService WhoAmI", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		resp, httpRes, err := apiClient.SystemAPI.WhoAmI(context.Background()).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 }

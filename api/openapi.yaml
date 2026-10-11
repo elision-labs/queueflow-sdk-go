@@ -9,7 +9,7 @@ info:
     name: MIT
     url: https://opensource.org/licenses/MIT
   title: QueueFlow API
-  version: 0.3.0
+  version: 0.5.0
 servers:
 - description: Local development
   url: http://localhost:8000
@@ -52,6 +52,24 @@ paths:
         required: false
         schema:
           type: string
+        style: form
+      - description: Filter by task name (jobs and dead letters).
+        explode: true
+        in: query
+        name: task_name
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Dead letters only: `false` lists entries not yet replayed, `true` the
+          replayed ones; both when omitted.
+        explode: true
+        in: query
+        name: replayed
+        required: false
+        schema:
+          type: boolean
         style: form
       - description: "Page size, 1..=100 (default 50)."
         explode: true
@@ -346,6 +364,24 @@ paths:
         schema:
           type: string
         style: form
+      - description: Filter by task name (jobs and dead letters).
+        explode: true
+        in: query
+        name: task_name
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Dead letters only: `false` lists entries not yet replayed, `true` the
+          replayed ones; both when omitted.
+        explode: true
+        in: query
+        name: replayed
+        required: false
+        schema:
+          type: boolean
+        style: form
       - description: "Page size, 1..=100 (default 50)."
         explode: true
         in: query
@@ -419,14 +455,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListDeadLettersResponse'
-          description: "Page of dead letters, newest first (the `status` filter does\
-            \ not apply)"
+          description: "Page of dead letters, newest first. `queue`, `task_name`,\
+            \ `replayed` and the time window apply; `status` does not."
         "401":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
           description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - dlq
+  /api/v1/dlq/replay:
+    post:
+      operationId: replayDeadLetters
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayDeadLettersRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayDeadLettersResponse'
+          description: "Every unreplayed dead letter matching the filter (oldest first,\
+            \ up to `limit`) was replayed as a fresh job, or is listed with the reason\
+            \ it could not be."
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
       security:
       - bearerAuth: []
       tags:
@@ -541,6 +611,24 @@ paths:
         required: false
         schema:
           type: string
+        style: form
+      - description: Filter by task name (jobs and dead letters).
+        explode: true
+        in: query
+        name: task_name
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Dead letters only: `false` lists entries not yet replayed, `true` the
+          replayed ones; both when omitted.
+        explode: true
+        in: query
+        name: replayed
+        required: false
+        schema:
+          type: boolean
         style: form
       - description: "Page size, 1..=100 (default 50)."
         explode: true
@@ -697,6 +785,46 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
           description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - jobs
+  /api/v1/jobs/cancel:
+    post:
+      operationId: cancelJobs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelJobsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelJobsResponse'
+          description: "Matching non-terminal jobs of the caller's tenant were cancelled,\
+            \ oldest first, up to `limit`. Repeat until `cancelled` is below `limit`\
+            \ to drain a large set."
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid filter (for example a terminal status)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
       security:
       - bearerAuth: []
       tags:
@@ -982,10 +1110,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueuesResponse'
-          description: "Live backlog per queue for the caller's tenant: claimable\
-            \ (`pending`), waiting for a future run time (`scheduled`), and `running`\
-            \ counts, plus how long the oldest claimable job has waited. Queues with\
-            \ no non-terminal jobs are omitted."
+          description: "Backlog per queue for the caller's tenant: claimable (`pending`),\
+            \ waiting for a future run time (`scheduled`), and `running` counts, how\
+            \ long the oldest claimable job has waited, and whether the queue is `paused`.\
+            \ Lists every queue the tenant has enqueued to (since 0.5.0) and any with\
+            \ non-terminal jobs."
       security:
       - bearerAuth: []
       tags:
@@ -1032,6 +1161,90 @@ paths:
       - bearerAuth: []
       tags:
       - worker
+  /api/v1/queues/{queue}/pause:
+    post:
+      operationId: pauseQueue
+      parameters:
+      - description: Queue name
+        explode: false
+        in: path
+        name: queue
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueControlResponse'
+          description: "Claims of the caller's jobs on this queue are paused: pending\
+            \ jobs wait, running jobs finish. The queue is drained once `running`\
+            \ reaches zero. Idempotent."
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid queue name
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+      security:
+      - bearerAuth: []
+      tags:
+      - system
+  /api/v1/queues/{queue}/resume:
+    post:
+      operationId: resumeQueue
+      parameters:
+      - description: Queue name
+        explode: false
+        in: path
+        name: queue
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueControlResponse'
+          description: Claims resume immediately; parked workers are woken. Idempotent.
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Invalid queue name
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Forbidden
+      security:
+      - bearerAuth: []
+      tags:
+      - system
   /api/v1/stats:
     get:
       operationId: getStats
@@ -1065,6 +1278,26 @@ paths:
       - bearerAuth: []
       tags:
       - system
+  /api/v1/whoami:
+    get:
+      operationId: whoAmI
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhoAmIResponse'
+          description: The tenant and access level of the bearer token
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      tags:
+      - system
   /api/v1/workflows:
     get:
       operationId: listWorkflows
@@ -1084,6 +1317,24 @@ paths:
         required: false
         schema:
           type: string
+        style: form
+      - description: Filter by task name (jobs and dead letters).
+        explode: true
+        in: query
+        name: task_name
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |-
+          Dead letters only: `false` lists entries not yet replayed, `true` the
+          replayed ones; both when omitted.
+        explode: true
+        in: query
+        name: replayed
+        required: false
+        schema:
+          type: boolean
         style: form
       - description: "Page size, 1..=100 (default 50)."
         explode: true
@@ -1400,6 +1651,65 @@ components:
       - linear
       - exponential
       type: string
+    CancelJobsRequest:
+      description: |-
+        Which jobs a bulk cancel applies to. Every field is optional; an empty
+        body cancels the caller's oldest non-terminal jobs up to `limit`.
+      example:
+        task_name: task_name
+        created_after: 2000-01-23T04:56:07.000+00:00
+        created_before: 2000-01-23T04:56:07.000+00:00
+        limit: 0
+        queue: queue
+        status: status
+      properties:
+        created_after:
+          description: "Only jobs created at or after this instant (RFC 3339, inclusive)."
+          format: date-time
+          nullable: true
+          type: string
+        created_before:
+          description: "Only jobs created strictly before this instant (RFC 3339,\
+            \ exclusive)."
+          format: date-time
+          nullable: true
+          type: string
+        limit:
+          description: |-
+            Cancel at most this many (oldest first). Default 100; the maximum is
+            the server's batch limit (`--max-batch`, 1000 by default).
+          format: int64
+          nullable: true
+          type: integer
+        queue:
+          description: Only jobs on this queue.
+          nullable: true
+          type: string
+        status:
+          description: |-
+            Only jobs in this state: `pending`, `retrying` or `running` (all three
+            when omitted). Terminal states are rejected: history is never
+            rewritten.
+          nullable: true
+          type: string
+        task_name:
+          description: Only jobs for this task.
+          nullable: true
+          type: string
+    CancelJobsResponse:
+      example:
+        cancelled: 0
+      properties:
+        cancelled:
+          description: |-
+            How many jobs this call cancelled. Less than `limit` means the
+            matching set is exhausted (jobs finishing concurrently are left as
+            they ended, never overwritten).
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - cancelled
     CompleteJobRequest:
       description: "Body for `POST /api/v1/jobs/{id}/complete`."
       example:
@@ -2597,6 +2907,37 @@ components:
       enum:
       - continue
       type: string
+    QueueControlResponse:
+      description: "Pause or resume outcome: the queue's live counts with its new\
+        \ flag."
+      example:
+        running: 0
+        paused: true
+        pending: 0
+        queue: queue
+      properties:
+        paused:
+          description: Claims of the caller's jobs on this queue are paused.
+          type: boolean
+        pending:
+          description: Claimable jobs of the caller waiting on this queue.
+          format: int64
+          minimum: 0
+          type: integer
+        queue:
+          type: string
+        running:
+          description: |-
+            Jobs of the caller still leased by workers. A paused queue is drained
+            once this reaches zero.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - paused
+      - pending
+      - queue
+      - running
     QueueStats:
       description: |-
         Live, per-queue backlog figures read from the store: what an operator
@@ -2605,6 +2946,7 @@ components:
         totals live in [`StatsSnapshot`] via `JobStore::count_stats`.
       example:
         running: 0
+        paused: true
         scheduled: 0
         pending: 0
         oldest_pending_age_secs: 0
@@ -2619,6 +2961,13 @@ components:
           minimum: 0
           nullable: true
           type: integer
+        paused:
+          description: |-
+            Claims for this tenant's jobs on the queue are paused (see
+            `POST /api/v1/queues/{queue}/pause`). Pending jobs accumulate; running
+            ones finish. In the all-tenants view this is true only when every
+            registered tenant of the queue is paused.
+          type: boolean
         pending:
           description: "Claimable now: `pending` or `retrying` with `scheduled_at`\
             \ in the past."
@@ -2647,11 +2996,13 @@ components:
       example:
         queues:
         - running: 0
+          paused: true
           scheduled: 0
           pending: 0
           oldest_pending_age_secs: 0
           queue: queue
         - running: 0
+          paused: true
           scheduled: 0
           pending: 0
           oldest_pending_age_secs: 0
@@ -2659,8 +3010,9 @@ components:
       properties:
         queues:
           description: |-
-            One entry per queue that currently has non-terminal jobs, sorted by
-            name.
+            One entry per queue the caller has enqueued to (since 0.5.0, whether or
+            not it currently has jobs) or that currently has non-terminal jobs,
+            sorted by name.
           items:
             $ref: '#/components/schemas/QueueStats'
           type: array
@@ -2683,6 +3035,92 @@ components:
           type: string
       required:
       - job_id
+    ReplayDeadLettersRequest:
+      description: |-
+        Which dead letters a bulk replay applies to. Every field is optional; an
+        empty body replays the caller's oldest unreplayed dead letters up to
+        `limit`.
+      example:
+        task_name: task_name
+        created_after: 2000-01-23T04:56:07.000+00:00
+        created_before: 2000-01-23T04:56:07.000+00:00
+        limit: 0
+        queue: queue
+      properties:
+        created_after:
+          description: "Only entries created at or after this instant (RFC 3339, inclusive)."
+          format: date-time
+          nullable: true
+          type: string
+        created_before:
+          description: |-
+            Only entries created strictly before this instant (RFC 3339,
+            exclusive).
+          format: date-time
+          nullable: true
+          type: string
+        limit:
+          description: |-
+            Consider at most this many entries (oldest first). Default 100; the
+            maximum is the server's batch limit (`--max-batch`).
+          format: int64
+          nullable: true
+          type: integer
+        queue:
+          description: Only dead letters from this queue.
+          nullable: true
+          type: string
+        task_name:
+          description: Only dead letters for this task.
+          nullable: true
+          type: string
+    ReplayDeadLettersResponse:
+      example:
+        results:
+        - dead_letter_id: 6
+          job_id: job_id
+          error: error
+        - dead_letter_id: 6
+          job_id: job_id
+          error: error
+        replayed: 0
+      properties:
+        replayed:
+          description: How many of `results` produced a job.
+          format: int64
+          minimum: 0
+          type: integer
+        results:
+          description: |-
+            Entries that were replayed (`job_id` set) or could not be (`error`
+            set), oldest first. Entries already replayed are not listed.
+          items:
+            $ref: '#/components/schemas/ReplayedDeadLetter'
+          type: array
+      required:
+      - replayed
+      - results
+    ReplayedDeadLetter:
+      description: One dead letter's outcome in a bulk replay.
+      example:
+        dead_letter_id: 6
+        job_id: job_id
+        error: error
+      properties:
+        dead_letter_id:
+          format: int64
+          type: integer
+        error:
+          description: "Why it did not, for example the original job was purged by\
+            \ retention."
+          nullable: true
+          type: string
+        job_id:
+          description: "The fresh job, when the replay succeeded."
+          nullable: true
+          type: string
+      required:
+      - dead_letter_id
     StatsSnapshot:
       description: "Plain snapshot of [`EngineStats`]."
       example:
@@ -2758,6 +3196,23 @@ components:
           type: array
       required:
       - tasks
+    WhoAmIResponse:
+      description: "The caller's identity, as the server resolved it from the bearer\
+        \ token."
+      example:
+        access: access
+        tenant: tenant
+      properties:
+        access:
+          description: "`read_write`, or `read_only` for a `:ro` key or a `scope:\
+            \ read` JWT."
+          type: string
+        tenant:
+          description: The tenant every request with this credential is scoped to.
+          type: string
+      required:
+      - access
+      - tenant
     Workflow:
       description: A workflow instance and its steps.
       example:

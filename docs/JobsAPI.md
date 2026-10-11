@@ -5,6 +5,7 @@ All URIs are relative to *http://localhost:8000*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**CancelJob**](JobsAPI.md#CancelJob) | **Post** /api/v1/jobs/{id}/cancel | 
+[**CancelJobs**](JobsAPI.md#CancelJobs) | **Post** /api/v1/jobs/cancel | 
 [**CreateBatchJobs**](JobsAPI.md#CreateBatchJobs) | **Post** /api/v1/jobs/batch | 
 [**CreateJob**](JobsAPI.md#CreateJob) | **Post** /api/v1/jobs | 
 [**GetJob**](JobsAPI.md#GetJob) | **Get** /api/v1/jobs/{id} | 
@@ -72,6 +73,70 @@ Name | Type | Description  | Notes
 ### HTTP request headers
 
 - **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## CancelJobs
+
+> CancelJobsResponse CancelJobs(ctx).CancelJobsRequest(cancelJobsRequest).Execute()
+
+
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
+)
+
+func main() {
+	cancelJobsRequest := *openapiclient.NewCancelJobsRequest() // CancelJobsRequest | 
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	resp, r, err := apiClient.JobsAPI.CancelJobs(context.Background()).CancelJobsRequest(cancelJobsRequest).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `JobsAPI.CancelJobs``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+	// response from `CancelJobs`: CancelJobsResponse
+	fmt.Fprintf(os.Stdout, "Response from `JobsAPI.CancelJobs`: %v\n", resp)
+}
+```
+
+### Path Parameters
+
+
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiCancelJobsRequest struct via the builder pattern
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **cancelJobsRequest** | [**CancelJobsRequest**](CancelJobsRequest.md) |  | 
+
+### Return type
+
+[**CancelJobsResponse**](CancelJobsResponse.md)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: application/json
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
@@ -279,7 +344,7 @@ Name | Type | Description  | Notes
 
 ## ListJobs
 
-> ListJobsResponse ListJobs(ctx).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
+> ListJobsResponse ListJobs(ctx).Status(status).Queue(queue).TaskName(taskName).Replayed(replayed).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 
 
 
@@ -299,6 +364,8 @@ import (
 func main() {
 	status := "status_example" // string | Filter by status (e.g. `pending`, `completed`). (optional)
 	queue := "queue_example" // string | Filter by queue name (jobs only). (optional)
+	taskName := "taskName_example" // string | Filter by task name (jobs and dead letters). (optional)
+	replayed := true // bool | Dead letters only: `false` lists entries not yet replayed, `true` the replayed ones; both when omitted. (optional)
 	limit := int64(789) // int64 | Page size, 1..=100 (default 50). (optional)
 	offset := int64(789) // int64 | Number of records to skip (default 0). (optional)
 	orderBy := "orderBy_example" // string | `created_at ASC` or `created_at DESC` (default DESC). (optional)
@@ -309,7 +376,7 @@ func main() {
 
 	configuration := openapiclient.NewConfiguration()
 	apiClient := openapiclient.NewAPIClient(configuration)
-	resp, r, err := apiClient.JobsAPI.ListJobs(context.Background()).Status(status).Queue(queue).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
+	resp, r, err := apiClient.JobsAPI.ListJobs(context.Background()).Status(status).Queue(queue).TaskName(taskName).Replayed(replayed).Limit(limit).Offset(offset).OrderBy(orderBy).IncludeTotal(includeTotal).Cursor(cursor).CreatedAfter(createdAfter).CreatedBefore(createdBefore).Execute()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error when calling `JobsAPI.ListJobs``: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
@@ -332,6 +399,8 @@ Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **status** | **string** | Filter by status (e.g. &#x60;pending&#x60;, &#x60;completed&#x60;). | 
  **queue** | **string** | Filter by queue name (jobs only). | 
+ **taskName** | **string** | Filter by task name (jobs and dead letters). | 
+ **replayed** | **bool** | Dead letters only: &#x60;false&#x60; lists entries not yet replayed, &#x60;true&#x60; the replayed ones; both when omitted. | 
  **limit** | **int64** | Page size, 1..&#x3D;100 (default 50). | 
  **offset** | **int64** | Number of records to skip (default 0). | 
  **orderBy** | **string** | &#x60;created_at ASC&#x60; or &#x60;created_at DESC&#x60; (default DESC). | 
