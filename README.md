@@ -153,11 +153,11 @@ handlers := map[string]queueflow.Handler{
 	"send-email": func(ctx context.Context, job *queueflow.Job) (map[string]interface{}, error) {
 		// ctx is cancelled if the job's lease is lost (cancelled mid-run or
 		// reclaimed) and when the drain timeout passes after a stop.
-		if err := sendEmail(ctx, job.Payload); err != nil {
-			return nil, err // retryable: the server applies the job's retry policy
-		}
 		if job.Payload["to"] == nil {
 			return nil, queueflow.NonRetryable(errors.New("no recipient")) // dead-letters immediately
+		}
+		if err := sendEmail(ctx, job.Payload); err != nil {
+			return nil, err // retryable: the server applies the job's retry policy
 		}
 		return map[string]interface{}{"sent": true}, nil
 	},
