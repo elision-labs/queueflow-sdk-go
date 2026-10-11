@@ -435,3 +435,301 @@ func TestLiveWorkerNonRetryableFailureDeadLetters(t *testing.T) {
 		t.Fatalf("second replay: %v, want a 409 APIError", err)
 	}
 }
+
+func TestLiveWhoAmIReportsTheTenant(t *testing.T) {
+	qf := liveClient(t)
+	me, err := qf.WhoAmI(context.Background())
+	if err != nil {
+		t.Fatalf("WhoAmI: %v", err)
+	}
+	if me.Tenant == "" {
+		t.Fatal("WhoAmI returned an empty tenant")
+	}
+	// The rest of this suite creates jobs, so the configured token must be a
+	// read-write one.
+	if me.Access != "read_write" {
+		t.Fatalf("access = %q, want read_write", me.Access)
+	}
+}
+
+// Bulk cancel is scoped to this run's queue (the server is shared), filtered
+// by task and status, and refuses terminal statuses.
+func TestLiveCancelJobsByQueueTaskAndStatus(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-cancel-" + suffix
+	taskA := "go-live-cancel-a-" + suffix
+	taskB := "go-live-cancel-b-" + suffix
+
+	// Far-future jobs stay pending (nothing claims them) until cancelled.
+	runAt := time.Now().Add(24 * time.Hour)
+	var ids []string
+	for _, task := range []string{taskA, taskA, taskB} {
+		id, err := qf.CreateJobWithOptions(ctx, task, CreateJobOptions{Queue: queue, RunAt: &runAt})
+		if err != nil {
+			t.Fatalf("CreateJobWithOptions(%s): %v", task, err)
+		}
+		ids = append(ids, id)
+	}
+	defer func() { _, _ = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue}) }()
+
+	listed, err := qf.ListJobs(ctx, ListOptions{Queue: queue, TaskName: taskA, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(listed.Jobs) != 2 {
+		t.Fatalf("ListJobs(task %s) = %d jobs, want 2", taskA, len(listed.Jobs))
+	}
+
+	if _, err := qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue, Status: "completed"}); StatusCode(err) != 400 {
+		t.Fatalf("CancelJobs(status completed): %v, want a 400 APIError", err)
+	}
+
+	// A status filter that matches nothing on this queue cancels nothing.
+	n, err := qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue, Status: "running"})
+	if err != nil {
+		t.Fatalf("CancelJobs(running): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("CancelJobs(running) = %d, want 0", n)
+	}
+
+	n, err = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue, TaskName: taskA, Limit: 1})
+	if err != nil {
+		t.Fatalf("CancelJobs(task A, limit 1): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("CancelJobs(task A, limit 1) = %d, want 1", n)
+	}
+	// Exactly one task-A job went; task B was never a candidate.
+	status := func(id string) JobStatus {
+		job, err := qf.GetJob(ctx, id)
+		if err != nil {
+			t.Fatalf("GetJob(%s): %v", id, err)
+		}
+		return job.Status
+	}
+	cancelledA := 0
+	for _, id := range ids[:2] {
+		if status(id) == JOBSTATUS_CANCELLED {
+			cancelledA++
+		}
+	}
+	if cancelledA != 1 {
+		t.Fatalf("task-A jobs cancelled = %d, want 1", cancelledA)
+	}
+	if got := status(ids[2]); got != JOBSTATUS_PENDING {
+		t.Fatalf("task-B job status = %q, want pending", got)
+	}
+
+	n, err = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue, Status: "pending"})
+	if err != nil {
+		t.Fatalf("CancelJobs(pending): %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("CancelJobs(pending) = %d, want the remaining 2", n)
+	}
+	for _, id := range ids {
+		if got := status(id); got != JOBSTATUS_CANCELLED {
+			t.Fatalf("job %s status = %q, want cancelled", id, got)
+		}
+	}
+	n, err = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue})
+	if err != nil {
+		t.Fatalf("CancelJobs(exhausted): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("CancelJobs on an exhausted queue = %d, want 0", n)
+	}
+}
+
+// Bulk replay re-runs every unreplayed dead letter on this run's queue once;
+// the replayed flag then separates them in the dead-letter list.
+func TestLiveReplayDeadLettersByQueue(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-replay-" + suffix
+	task := "go-live-replay-task-" + suffix
+
+	var ids []string
+	for i := 0; i < 2; i++ {
+		id, err := qf.CreateJobWithOptions(ctx, task, CreateJobOptions{Queue: queue, Payload: map[string]interface{}{"i": i}})
+		if err != nil {
+			t.Fatalf("CreateJobWithOptions: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	// Whatever the replay enqueues on this queue is cleaned up.
+	defer func() { _, _ = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue}) }()
+
+	handlers := map[string]Handler{
+		task: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return nil, NonRetryable(fmt.Errorf("poison %s", job.Id))
+		},
+	}
+	workerCtx, stop := context.WithCancel(ctx)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- qf.Run(workerCtx, queue, handlers, WorkerOptions{Concurrency: 2, LeaseSecs: 10, WaitSecs: 2, Logf: t.Logf})
+	}()
+	for _, id := range ids {
+		done, err := qf.WaitForJob(ctx, id, liveWait)
+		if err != nil {
+			stop()
+			t.Fatalf("WaitForJob(%s): %v", id, err)
+		}
+		if done.Status != JOBSTATUS_FAILED {
+			stop()
+			t.Fatalf("job %s status = %q, want failed", id, done.Status)
+		}
+	}
+	stop()
+	if err := <-errc; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	notReplayed := false
+	pending, err := qf.ListDeadLetters(ctx, ListOptions{Queue: queue, Replayed: &notReplayed, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDeadLetters(replayed=false): %v", err)
+	}
+	if len(pending.DeadLetters) != 2 {
+		t.Fatalf("unreplayed dead letters on %s = %d, want 2", queue, len(pending.DeadLetters))
+	}
+	byTask, err := qf.ListDeadLetters(ctx, ListOptions{Queue: queue, TaskName: task, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDeadLetters(task): %v", err)
+	}
+	if len(byTask.DeadLetters) != 2 {
+		t.Fatalf("dead letters for task %s = %d, want 2", task, len(byTask.DeadLetters))
+	}
+	other, err := qf.ListDeadLetters(ctx, ListOptions{Queue: queue, TaskName: task + "-none", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDeadLetters(other task): %v", err)
+	}
+	if len(other.DeadLetters) != 0 {
+		t.Fatalf("dead letters for an unknown task = %d, want 0", len(other.DeadLetters))
+	}
+
+	out, err := qf.ReplayDeadLetters(ctx, ReplayDeadLettersFilter{Queue: queue, TaskName: task})
+	if err != nil {
+		t.Fatalf("ReplayDeadLetters: %v", err)
+	}
+	if out.Replayed != 2 || len(out.Results) != 2 {
+		t.Fatalf("ReplayDeadLetters = %+v, want 2 replayed", out)
+	}
+	original := map[string]bool{ids[0]: true, ids[1]: true}
+	for _, r := range out.Results {
+		newID := r.GetJobId()
+		if newID == "" || original[newID] || r.Error.IsSet() {
+			t.Fatalf("result %+v, want a fresh job id and no error", r)
+		}
+	}
+
+	// Already-replayed entries are not considered again.
+	again, err := qf.ReplayDeadLetters(ctx, ReplayDeadLettersFilter{Queue: queue})
+	if err != nil {
+		t.Fatalf("ReplayDeadLetters (second): %v", err)
+	}
+	if again.Replayed != 0 || len(again.Results) != 0 {
+		t.Fatalf("second ReplayDeadLetters = %+v, want nothing", again)
+	}
+	replayed := true
+	doneList, err := qf.ListDeadLetters(ctx, ListOptions{Queue: queue, Replayed: &replayed, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDeadLetters(replayed=true): %v", err)
+	}
+	if len(doneList.DeadLetters) != 2 {
+		t.Fatalf("replayed dead letters on %s = %d, want 2", queue, len(doneList.DeadLetters))
+	}
+	left, err := qf.ListDeadLetters(ctx, ListOptions{Queue: queue, Replayed: &notReplayed, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDeadLetters(replayed=false, after): %v", err)
+	}
+	if len(left.DeadLetters) != 0 {
+		t.Fatalf("unreplayed dead letters after replay = %d, want 0", len(left.DeadLetters))
+	}
+}
+
+// A paused queue hands out no leases and shows paused in the backlog view;
+// resuming makes the job claimable again.
+func TestLivePauseAndResumeQueueGateLeases(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-pause-" + suffix
+	task := "go-live-pause-task-" + suffix
+
+	id, err := qf.CreateJobWithOptions(ctx, task, CreateJobOptions{Queue: queue})
+	if err != nil {
+		t.Fatalf("CreateJobWithOptions: %v", err)
+	}
+	defer func() {
+		_, _ = qf.ResumeQueue(ctx, queue)
+		_, _ = qf.CancelJobs(ctx, CancelJobsFilter{Queue: queue})
+	}()
+
+	paused, err := qf.PauseQueue(ctx, queue)
+	if err != nil {
+		t.Fatalf("PauseQueue: %v", err)
+	}
+	if !paused.Paused || paused.Queue != queue || paused.Pending != 1 || paused.Running != 0 {
+		t.Fatalf("PauseQueue = %+v, want paused with 1 pending, 0 running", paused)
+	}
+	// Idempotent.
+	if again, err := qf.PauseQueue(ctx, queue); err != nil || !again.Paused {
+		t.Fatalf("second PauseQueue: %+v, %v", again, err)
+	}
+
+	leased, err := qf.LeaseJobs(ctx, queue, LeaseOptions{MaxJobs: 1, LeaseSecs: 10, WaitSecs: 1})
+	if err != nil {
+		t.Fatalf("LeaseJobs while paused: %v", err)
+	}
+	if len(leased) != 0 {
+		t.Fatalf("leased %d jobs from a paused queue, want 0", len(leased))
+	}
+
+	queues, err := qf.Queues(ctx)
+	if err != nil {
+		t.Fatalf("Queues: %v", err)
+	}
+	seen := false
+	for _, qs := range queues {
+		if qs.Queue == queue {
+			seen = true
+			if !qs.GetPaused() {
+				t.Fatalf("Queues() reports %s as not paused: %+v", queue, qs)
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("queue %s missing from Queues()", queue)
+	}
+
+	resumed, err := qf.ResumeQueue(ctx, queue)
+	if err != nil {
+		t.Fatalf("ResumeQueue: %v", err)
+	}
+	if resumed.Paused || resumed.Pending != 1 {
+		t.Fatalf("ResumeQueue = %+v, want not paused with 1 pending", resumed)
+	}
+	leased, err = qf.LeaseJobs(ctx, queue, LeaseOptions{MaxJobs: 1, LeaseSecs: 10, WaitSecs: 5})
+	if err != nil {
+		t.Fatalf("LeaseJobs after resume: %v", err)
+	}
+	if len(leased) != 1 || leased[0].Job.Id != id {
+		t.Fatalf("leased = %+v, want job %s", leased, id)
+	}
+	if err := qf.CompleteJob(ctx, &leased[0], map[string]interface{}{"ok": true}); err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+	done, err := qf.GetJob(ctx, id)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if done.Status != JOBSTATUS_COMPLETED {
+		t.Fatalf("status = %q, want completed", done.Status)
+	}
+}

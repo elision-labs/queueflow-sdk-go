@@ -492,19 +492,245 @@ func TestListJobsForwardsFilters(t *testing.T) {
 		fmt.Fprint(w, `{"jobs":[],"limit":50,"offset":0,"has_more":false}`)
 	})
 	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	_, err := qf.ListJobs(context.Background(), ListOptions{Status: "failed", Queue: "billing", Limit: 50, Cursor: "abc", CreatedAfter: &after})
+	replayed := false
+	_, err := qf.ListJobs(context.Background(), ListOptions{Status: "failed", Queue: "billing", TaskName: "charge", Limit: 50, Cursor: "abc", CreatedAfter: &after, Replayed: &replayed})
 	if err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
-	for _, want := range []string{"status=failed", "queue=billing", "limit=50", "cursor=abc", "created_after=2026-01-01"} {
+	for _, want := range []string{"status=failed", "queue=billing", "task_name=charge", "limit=50", "cursor=abc", "created_after=2026-01-01"} {
 		if !strings.Contains(query, want) {
 			t.Errorf("query %q lacks %q", query, want)
 		}
 	}
-	for _, absent := range []string{"offset=", "order_by=", "include_total=", "created_before="} {
+	// Replayed is a dead-letter filter; the job list never sends it.
+	for _, absent := range []string{"offset=", "order_by=", "include_total=", "created_before=", "replayed="} {
 		if strings.Contains(query, absent) {
 			t.Errorf("query %q should not carry %q", query, absent)
 		}
+	}
+}
+
+// The dead-letter list forwards TaskName and both values of Replayed (false
+// is a real filter, so it cannot be dropped as a zero value).
+func TestListDeadLettersForwardsTaskNameAndReplayed(t *testing.T) {
+	var queries []string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/dlq" {
+			t.Errorf("path = %s, want /api/v1/dlq", r.URL.Path)
+		}
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"dead_letters":[],"limit":10,"offset":0,"has_more":false}`)
+	})
+	ctx := context.Background()
+	notReplayed := false
+	if _, err := qf.ListDeadLetters(ctx, ListOptions{Queue: "billing", TaskName: "charge", Replayed: &notReplayed, Limit: 10}); err != nil {
+		t.Fatalf("ListDeadLetters: %v", err)
+	}
+	for _, want := range []string{"queue=billing", "task_name=charge", "replayed=false", "limit=10"} {
+		if !strings.Contains(queries[0], want) {
+			t.Errorf("query %q lacks %q", queries[0], want)
+		}
+	}
+	yes := true
+	if _, err := qf.ListDeadLetters(ctx, ListOptions{Replayed: &yes}); err != nil {
+		t.Fatalf("ListDeadLetters: %v", err)
+	}
+	if queries[1] != "replayed=true" {
+		t.Errorf("query = %q, want exactly replayed=true", queries[1])
+	}
+	if _, err := qf.ListDeadLetters(ctx, ListOptions{}); err != nil {
+		t.Fatalf("ListDeadLetters: %v", err)
+	}
+	if queries[2] != "" {
+		t.Errorf("query = %q, want no parameters for the zero ListOptions", queries[2])
+	}
+}
+
+// --- Bulk cancel and replay ------------------------------------------------
+
+// Set filter fields are posted under their wire names, unset ones are omitted,
+// and the cancelled count is unwrapped.
+func TestCancelJobsPostsTheFilterAndReturnsTheCount(t *testing.T) {
+	var posted map[string]any
+	var method, path string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		posted = decodeBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"cancelled":7}`)
+	})
+	before := time.Date(2026, 3, 1, 12, 0, 0, 0, time.FixedZone("plus2", 2*3600))
+	n, err := qf.CancelJobs(context.Background(), CancelJobsFilter{
+		Queue:         "billing",
+		TaskName:      "charge",
+		Status:        "pending",
+		CreatedBefore: &before,
+		Limit:         25,
+	})
+	if err != nil {
+		t.Fatalf("CancelJobs: %v", err)
+	}
+	if n != 7 {
+		t.Errorf("cancelled = %d, want 7", n)
+	}
+	if method != http.MethodPost || path != "/api/v1/jobs/cancel" {
+		t.Errorf("%s %s, want POST /api/v1/jobs/cancel", method, path)
+	}
+	if posted["queue"] != "billing" || posted["task_name"] != "charge" || posted["status"] != "pending" {
+		t.Errorf("posted = %v", posted)
+	}
+	if posted["limit"] != float64(25) {
+		t.Errorf("limit = %v, want 25", posted["limit"])
+	}
+	// Times are sent in UTC.
+	if posted["created_before"] != "2026-03-01T10:00:00Z" {
+		t.Errorf("created_before = %v, want 2026-03-01T10:00:00Z", posted["created_before"])
+	}
+	if _, ok := posted["created_after"]; ok {
+		t.Errorf("created_after should be omitted, posted = %v", posted)
+	}
+}
+
+// The zero filter is a valid request (cancel the oldest 100) and sends an
+// empty object, never nulls.
+func TestCancelJobsZeroFilterSendsAnEmptyBody(t *testing.T) {
+	var raw string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		raw = strings.TrimSpace(string(b))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"cancelled":0}`)
+	})
+	n, err := qf.CancelJobs(context.Background(), CancelJobsFilter{})
+	if err != nil {
+		t.Fatalf("CancelJobs: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("cancelled = %d, want 0", n)
+	}
+	if raw != "{}" {
+		t.Errorf("body = %q, want {}", raw)
+	}
+}
+
+// A terminal status is refused by the server; the 400 surfaces as an APIError
+// carrying the operation name.
+func TestCancelJobsRejectedStatusIsAnAPIError(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"status must be pending, retrying or running"}`)
+	})
+	_, err := qf.CancelJobs(context.Background(), CancelJobsFilter{Status: "completed"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error %T is not an *APIError: %v", err, err)
+	}
+	if apiErr.Status != 400 || apiErr.Op != "CancelJobs" || !strings.Contains(string(apiErr.Body), "pending, retrying or running") {
+		t.Errorf("apiErr = %+v", apiErr)
+	}
+}
+
+func TestReplayDeadLettersPostsTheFilterAndDecodesResults(t *testing.T) {
+	var posted map[string]any
+	var method, path string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		posted = decodeBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"replayed":1,"results":[{"dead_letter_id":11,"job_id":"job-new"},{"dead_letter_id":12,"error":"original job purged"}]}`)
+	})
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	out, err := qf.ReplayDeadLetters(context.Background(), ReplayDeadLettersFilter{Queue: "billing", TaskName: "charge", CreatedAfter: &after, Limit: 2})
+	if err != nil {
+		t.Fatalf("ReplayDeadLetters: %v", err)
+	}
+	if method != http.MethodPost || path != "/api/v1/dlq/replay" {
+		t.Errorf("%s %s, want POST /api/v1/dlq/replay", method, path)
+	}
+	if posted["queue"] != "billing" || posted["task_name"] != "charge" || posted["limit"] != float64(2) || posted["created_after"] != "2026-01-01T00:00:00Z" {
+		t.Errorf("posted = %v", posted)
+	}
+	if _, ok := posted["created_before"]; ok {
+		t.Errorf("created_before should be omitted, posted = %v", posted)
+	}
+	if out.Replayed != 1 || len(out.Results) != 2 {
+		t.Fatalf("response = %+v", out)
+	}
+	ok, failed := out.Results[0], out.Results[1]
+	if ok.DeadLetterId != 11 || ok.GetJobId() != "job-new" || ok.Error.IsSet() {
+		t.Errorf("results[0] = %+v", ok)
+	}
+	if failed.DeadLetterId != 12 || failed.GetError() != "original job purged" || failed.JobId.IsSet() {
+		t.Errorf("results[1] = %+v", failed)
+	}
+}
+
+// --- Queue control and identity --------------------------------------------
+
+func TestPauseAndResumeQueuePostToTheQueuePath(t *testing.T) {
+	var calls []string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		paused := strings.HasSuffix(r.URL.Path, "/pause")
+		fmt.Fprintf(w, `{"queue":"billing","paused":%t,"running":2,"pending":5}`, paused)
+	})
+	ctx := context.Background()
+	paused, err := qf.PauseQueue(ctx, "billing")
+	if err != nil {
+		t.Fatalf("PauseQueue: %v", err)
+	}
+	if !paused.Paused || paused.Queue != "billing" || paused.Running != 2 || paused.Pending != 5 {
+		t.Errorf("paused = %+v", paused)
+	}
+	resumed, err := qf.ResumeQueue(ctx, "billing")
+	if err != nil {
+		t.Fatalf("ResumeQueue: %v", err)
+	}
+	if resumed.Paused {
+		t.Errorf("resumed = %+v, want paused=false", resumed)
+	}
+	want := []string{"POST /api/v1/queues/billing/pause", "POST /api/v1/queues/billing/resume"}
+	if strings.Join(calls, ",") != strings.Join(want, ",") {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+// Queue names are path segments and must be escaped on the way out.
+func TestPauseQueueEscapesTheQueueName(t *testing.T) {
+	var rawPath string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		rawPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"queue":"a/b c","paused":true,"running":0,"pending":0}`)
+	})
+	if _, err := qf.PauseQueue(context.Background(), "a/b c"); err != nil {
+		t.Fatalf("PauseQueue: %v", err)
+	}
+	if rawPath != "/api/v1/queues/a%2Fb%20c/pause" {
+		t.Errorf("path = %q", rawPath)
+	}
+}
+
+func TestWhoAmIReturnsTenantAndAccess(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/whoami" {
+			t.Errorf("%s %s, want GET /api/v1/whoami", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tenant":"acme","access":"read_only"}`)
+	})
+	me, err := qf.WhoAmI(context.Background())
+	if err != nil {
+		t.Fatalf("WhoAmI: %v", err)
+	}
+	if me.Tenant != "acme" || me.Access != "read_only" {
+		t.Errorf("whoami = %+v", me)
 	}
 }
 
@@ -513,7 +739,7 @@ func TestQueuesAndTasksUnwrapTheirEnvelopes(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/queues":
-			fmt.Fprint(w, `{"queues":[{"queue":"default","pending":2,"scheduled":0,"running":1,"oldest_pending_age_secs":12}]}`)
+			fmt.Fprint(w, `{"queues":[{"queue":"default","pending":2,"scheduled":0,"running":1,"oldest_pending_age_secs":12,"paused":true}]}`)
 		case "/api/v1/tasks":
 			fmt.Fprint(w, `{"tasks":["echo","sleep"]}`)
 		default:
@@ -524,7 +750,7 @@ func TestQueuesAndTasksUnwrapTheirEnvelopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Queues: %v", err)
 	}
-	if len(queues) != 1 || queues[0].Queue != "default" || queues[0].Pending != 2 {
+	if len(queues) != 1 || queues[0].Queue != "default" || queues[0].Pending != 2 || !queues[0].GetPaused() {
 		t.Errorf("queues = %+v", queues)
 	}
 	tasks, err := qf.Tasks(context.Background())

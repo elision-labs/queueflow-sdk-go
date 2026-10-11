@@ -4,8 +4,9 @@ Go client for [QueueFlow](https://queueflow.dev), a PostgreSQL-native distribute
 workflow engine.
 
 - **Typed end-to-end**: request/response models mirror the server's OpenAPI 3.1 spec.
-- **Ergonomic**: one method per endpoint on `QueueFlow`, `WaitForJob`/`WaitForWorkflow` pollers,
-  and a workflow builder with local DAG validation.
+- **Ergonomic**: one method per endpoint on `QueueFlow`, including bulk `CancelJobs` and
+  `ReplayDeadLetters`, `PauseQueue`/`ResumeQueue` and `WhoAmI`; `WaitForJob`/`WaitForWorkflow`
+  pollers; and a workflow builder with local DAG validation.
 - **Worker runtime**: `Run` leases jobs, runs your handlers concurrently, heartbeats them, and
   reports outcomes, with the server's retry policy and dead-letter queue doing the rest.
 - **Typed errors**: every non-2xx response is an `*APIError` carrying the status and body.
@@ -98,8 +99,9 @@ except the lease long-poll, which is bounded by `wait_secs + 35s` instead.
 | `CreateJob(ctx, task, payload) (string, error)` | Enqueue with the server defaults; returns the job id. |
 | `CreateJobWithOptions(ctx, task, CreateJobOptions) (string, error)` | Enqueue with config, idempotency key and `RunAt`; returns the job id. |
 | `GetJob(ctx, id) (*Job, error)` | Fetch a job. |
-| `ListJobs(ctx, ListOptions) (*ListJobsResponse, error)` | List jobs (`Status`, `Queue`, `Limit`, `Offset`, `OrderBy`, `IncludeTotal`, `Cursor`, `CreatedAfter`, `CreatedBefore`). |
+| `ListJobs(ctx, ListOptions) (*ListJobsResponse, error)` | List jobs (`Status`, `Queue`, `TaskName`, `Limit`, `Offset`, `OrderBy`, `IncludeTotal`, `Cursor`, `CreatedAfter`, `CreatedBefore`). |
 | `CancelJob(ctx, id) error` | Cancel a job. |
+| `CancelJobs(ctx, CancelJobsFilter) (int64, error)` | Cancel every non-terminal job matching the filter, up to `Limit` (default 100); returns how many were cancelled. |
 | `WaitForJob(ctx, id, WaitOptions) (*Job, error)` | Poll until `completed` / `failed` / `cancelled`. |
 
 `CreateJobOptions` is `{Payload, Queue, Priority, MaxRetries, Timeout, RetryBackoff,
@@ -111,7 +113,23 @@ sent, so the server defaults apply. The same `IdempotencyKey` returns the origin
 the deadline the error wraps `queueflow.ErrTimeout`; a cancelled context returns `ctx.Err()`.
 
 List responses carry `NextCursor` when there are more pages; pass it back as `Cursor` for keyset
-pagination (cheaper than deep `Offset`).
+pagination (cheaper than deep `Offset`). `ListOptions.TaskName` applies to the job and dead-letter
+lists; `ListOptions.Replayed` (a `*bool`) to the dead-letter list only.
+
+`CancelJobsFilter` is `{Queue, TaskName, Status, CreatedAfter, CreatedBefore, Limit}`; every field
+is optional and the zero filter cancels the caller's oldest 100 non-terminal jobs. `Status` must be
+`pending`, `retrying` or `running` (a terminal status is a 400). A count below `Limit` means the
+matching set is exhausted.
+
+```go
+// Drain a queue's backlog for one task, 500 jobs at a time.
+for {
+	n, err := qf.CancelJobs(ctx, queueflow.CancelJobsFilter{Queue: "billing", TaskName: "charge", Limit: 500})
+	if err != nil || n < 500 {
+		break
+	}
+}
+```
 
 ### Workflows
 
@@ -207,17 +225,59 @@ The raw protocol is also exposed: `LeaseJobs(ctx, queue, LeaseOptions)`,
 
 | Method | Description |
 | --- | --- |
-| `ListDeadLetters(ctx, ListOptions)` / `GetDeadLetter(ctx, id int64)` | Inspect terminally-failed jobs. |
+| `ListDeadLetters(ctx, ListOptions)` / `GetDeadLetter(ctx, id int64)` | Inspect terminally-failed jobs (`ListOptions.TaskName` and `Replayed` filter the list). |
 | `ReplayDeadLetter(ctx, id int64) (string, error)` | Re-run one as a fresh job; returns the new job id (at most once; a second replay is a 409). |
+| `ReplayDeadLetters(ctx, ReplayDeadLettersFilter) (*ReplayDeadLettersResponse, error)` | Re-run every unreplayed entry matching the filter, up to `Limit` (default 100). |
+
+`ReplayDeadLettersFilter` is `{Queue, TaskName, CreatedAfter, CreatedBefore, Limit}`. The response
+has `Replayed` (how many produced a job) and `Results`, one `ReplayedDeadLetter` per considered
+entry with `DeadLetterId` and either `JobId` (the fresh job) or `Error` (why it could not be
+replayed, for example the original job was purged). Entries already replayed are never considered,
+so repeating the call is safe.
+
+```go
+notReplayed := false
+pending, err := qf.ListDeadLetters(ctx, queueflow.ListOptions{Queue: "billing", Replayed: &notReplayed})
+// ...
+out, err := qf.ReplayDeadLetters(ctx, queueflow.ReplayDeadLettersFilter{Queue: "billing"})
+for _, r := range out.Results {
+	if r.JobId.IsSet() {
+		log.Printf("dead letter %d replayed as %s", r.DeadLetterId, r.GetJobId())
+	} else {
+		log.Printf("dead letter %d not replayed: %s", r.DeadLetterId, r.GetError())
+	}
+}
+```
 
 ### System
 
 | Method | Description |
 | --- | --- |
 | `Stats(ctx) (*StatsSnapshot, error)` | Engine counters. |
-| `Queues(ctx) ([]QueueStats, error)` | Live per-queue backlog: `Pending`, `Scheduled`, `Running`, `OldestPendingAgeSecs`. |
+| `Queues(ctx) ([]QueueStats, error)` | Live per-queue backlog: `Pending`, `Scheduled`, `Running`, `OldestPendingAgeSecs`, `Paused` (`GetPaused()`). |
+| `PauseQueue(ctx, queue) (*QueueControlResponse, error)` | Stop workers from claiming this tenant's jobs on the queue; running jobs finish. Idempotent. |
+| `ResumeQueue(ctx, queue) (*QueueControlResponse, error)` | Let claims resume. Idempotent. |
 | `Tasks(ctx) ([]string, error)` | Registered task handler names. |
+| `WhoAmI(ctx) (*WhoAmIResponse, error)` | The `Tenant` the token is scoped to and its `Access` (`read_write` or `read_only`). |
 | `Health(ctx)` / `Ready(ctx)` | `GET /health` / `GET /ready`. |
+
+`QueueControlResponse` is `{Queue, Paused, Running, Pending}`; a paused queue is drained once
+`Running` reaches zero:
+
+```go
+if _, err := qf.PauseQueue(ctx, "billing"); err != nil {
+	return err
+}
+for {
+	state, err := qf.PauseQueue(ctx, "billing") // idempotent: re-reads the counts
+	if err != nil || state.Running == 0 {
+		break
+	}
+	time.Sleep(time.Second)
+}
+// ... deploy, migrate, ...
+_, err = qf.ResumeQueue(ctx, "billing")
+```
 
 ### Everything else: the generated client
 
@@ -283,9 +343,11 @@ until the stream closes (terminal status or the 15-minute cap) and returns it as
 `live_test.go` runs the facade against a real QueueFlow server (started with the default
 `queueflow serve`, i.e. `--mode all`, so the built-in `echo` handler is registered). It creates
 and waits on an `echo` job, checks idempotent re-creation and list filters, runs a two-step
-workflow, exercises the cron, dead-letter, queue backlog and stats endpoints, and runs `Run`
-against a dedicated queue: one scenario completes a job with a handler only the test knows,
-another dead-letters a job with `NonRetryable` and replays it. The tests skip themselves unless
+workflow, exercises the cron, dead-letter, queue backlog, stats and `WhoAmI` endpoints, and runs
+`Run` against a dedicated queue: one scenario completes a job with a handler only the test knows,
+another dead-letters a job with `NonRetryable` and replays it. Bulk `CancelJobs`,
+`ReplayDeadLetters` and `PauseQueue`/`ResumeQueue` each get a scenario on a queue unique to the
+run, so the suite is safe against a shared server. The tests skip themselves unless
 `QUEUEFLOW_URL` is set, so plain `go test ./...` and CI stay offline.
 
 ```bash
