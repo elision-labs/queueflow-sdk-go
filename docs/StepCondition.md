@@ -9,7 +9,7 @@ Name | Type | Description | Notes
 **Not** | Pointer to [**NullableStepCondition**](StepCondition.md) |  | [optional] 
 **Op** | Pointer to [**NullableConditionOp**](ConditionOp.md) |  | [optional] 
 **Path** | Pointer to **NullableString** |  | [optional] 
-**Value** | Pointer to **map[string]interface{}** |  | [optional] 
+**Value** | Pointer to **interface{}** |  | [optional] 
 
 ## Methods
 
@@ -207,20 +207,20 @@ HasPath returns a boolean if a field has been set.
 UnsetPath ensures that no value is present for Path, not even an explicit nil
 ### GetValue
 
-`func (o *StepCondition) GetValue() map[string]interface{}`
+`func (o *StepCondition) GetValue() interface{}`
 
 GetValue returns the Value field if non-nil, zero value otherwise.
 
 ### GetValueOk
 
-`func (o *StepCondition) GetValueOk() (*map[string]interface{}, bool)`
+`func (o *StepCondition) GetValueOk() (*interface{}, bool)`
 
 GetValueOk returns a tuple with the Value field if it's non-nil, zero value otherwise
 and a boolean to check if the value has been set.
 
 ### SetValue
 
-`func (o *StepCondition) SetValue(v map[string]interface{})`
+`func (o *StepCondition) SetValue(v interface{})`
 
 SetValue sets Value field to given value.
 

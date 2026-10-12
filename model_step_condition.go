@@ -26,7 +26,7 @@ type StepCondition struct {
 	Not NullableStepCondition `json:"not,omitempty"`
 	Op NullableConditionOp `json:"op,omitempty"`
 	Path NullableString `json:"path,omitempty"`
-	Value map[string]interface{} `json:"value,omitempty"`
+	Value interface{} `json:"value,omitempty"`
 }
 
 // NewStepCondition instantiates a new StepCondition object
@@ -239,9 +239,9 @@ func (o *StepCondition) UnsetPath() {
 }
 
 // GetValue returns the Value field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *StepCondition) GetValue() map[string]interface{} {
+func (o *StepCondition) GetValue() interface{} {
 	if o == nil {
-		var ret map[string]interface{}
+		var ret interface{}
 		return ret
 	}
 	return o.Value
@@ -250,11 +250,11 @@ func (o *StepCondition) GetValue() map[string]interface{} {
 // GetValueOk returns a tuple with the Value field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *StepCondition) GetValueOk() (map[string]interface{}, bool) {
+func (o *StepCondition) GetValueOk() (*interface{}, bool) {
 	if o == nil || IsNil(o.Value) {
-		return map[string]interface{}{}, false
+		return nil, false
 	}
-	return o.Value, true
+	return &o.Value, true
 }
 
 // HasValue returns a boolean if a field has been set.
@@ -266,8 +266,8 @@ func (o *StepCondition) HasValue() bool {
 	return false
 }
 
-// SetValue gets a reference to the given map[string]interface{} and assigns it to the Value field.
-func (o *StepCondition) SetValue(v map[string]interface{}) {
+// SetValue gets a reference to the given interface{} and assigns it to the Value field.
+func (o *StepCondition) SetValue(v interface{}) {
 	o.Value = v
 }
 

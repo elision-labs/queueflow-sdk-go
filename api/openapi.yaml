@@ -2948,7 +2948,7 @@ components:
               any:
               - null
               - null
-              value: "{}"
+              value: ""
             fan_out:
               path: path
               item_key: item_key
@@ -2993,7 +2993,7 @@ components:
               any:
               - null
               - null
-              value: "{}"
+              value: ""
             fan_out:
               path: path
               item_key: item_key
@@ -3056,7 +3056,7 @@ components:
               any:
               - null
               - null
-              value: "{}"
+              value: ""
             fan_out:
               path: path
               item_key: item_key
@@ -3101,7 +3101,7 @@ components:
               any:
               - null
               - null
-              value: "{}"
+              value: ""
             fan_out:
               path: path
               item_key: item_key
@@ -3444,7 +3444,7 @@ components:
         any:
         - null
         - null
-        value: "{}"
+        value: ""
       properties:
         all:
           description: True when every member is true.
@@ -3465,9 +3465,7 @@ components:
         path:
           nullable: true
           type: string
-        value:
-          nullable: true
-          type: object
+        value: {}
     StepStatus:
       description: Lifecycle state of a single workflow step.
       enum:
@@ -3558,7 +3556,7 @@ components:
             any:
             - null
             - null
-            value: "{}"
+            value: ""
           fan_out:
             path: path
             item_key: item_key
@@ -3603,7 +3601,7 @@ components:
             any:
             - null
             - null
-            value: "{}"
+            value: ""
           fan_out:
             path: path
             item_key: item_key
@@ -3780,7 +3778,7 @@ components:
           any:
           - null
           - null
-          value: "{}"
+          value: ""
         fan_out:
           path: path
           item_key: item_key

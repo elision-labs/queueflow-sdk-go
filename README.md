@@ -208,12 +208,7 @@ sub-workflow, a step with both a fan-out and a sub-workflow, a fan-out without a
 condition without exactly one of `path`/`all`/`any`/`not`, a non-positive timeout, and any invalid
 inline child (errors name the step).
 
-Limitation: the server's spec declares the condition `value` as a JSON object, so the generated
-`StepCondition.Value` is a `map[string]interface{}` and this release can only compare against
-objects or test existence. A workflow whose condition carries a scalar or array value cannot be
-built through the builder, and `GetWorkflow`/`ListWorkflows` fail to decode one created elsewhere
-(`cannot unmarshal number into ... StepCondition.value`). This clears up once the spec entry is
-widened in queueflow-core and the SDK is regenerated.
+`When`'s value may be any JSON value: a number, string, bool, slice or map.
 
 ### Worker
 
