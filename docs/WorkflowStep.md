@@ -6,18 +6,22 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **Config** | Pointer to [**NullableJobConfig**](JobConfig.md) |  | [optional] 
 **DependsOn** | Pointer to **[]string** |  | [optional] 
+**FanOut** | Pointer to [**NullableFanOut**](FanOut.md) | Run the task once per element of an array in the context. | [optional] 
 **Metadata** | Pointer to **map[string]interface{}** |  | [optional] 
 **Name** | **string** |  | 
 **OnFailure** | Pointer to [**OnFailure**](OnFailure.md) |  | [optional] 
 **OnSuccess** | Pointer to [**OnSuccess**](OnSuccess.md) |  | [optional] 
 **Payload** | Pointer to **map[string]interface{}** |  | [optional] 
-**TaskName** | **string** |  | 
+**Queue** | Pointer to **NullableString** | Queue for this step&#39;s job(s); the server&#39;s default queue when absent. | [optional] 
+**TaskName** | Pointer to **string** | The task handler to run. May be omitted for a sub-workflow step. | [optional] 
+**When** | Pointer to [**NullableStepCondition**](StepCondition.md) | Run only when this condition holds against the workflow context at the moment the step becomes ready; otherwise the step is skipped with reason &#x60;condition not met&#x60; and its dependents proceed. | [optional] 
+**Workflow** | Pointer to [**NullableCreateWorkflowRequest**](CreateWorkflowRequest.md) | Run an inline child workflow instead of a task. The child&#39;s context is its own declared context plus this step&#39;s payload, with the parent&#39;s context under &#x60;_parent&#x60;; the step&#39;s result is the child&#39;s final context. | [optional] 
 
 ## Methods
 
 ### NewWorkflowStep
 
-`func NewWorkflowStep(name string, taskName string, ) *WorkflowStep`
+`func NewWorkflowStep(name string, ) *WorkflowStep`
 
 NewWorkflowStep instantiates a new WorkflowStep object
 This constructor will assign default values to properties that have it defined,
@@ -92,6 +96,41 @@ SetDependsOn sets DependsOn field to given value.
 
 HasDependsOn returns a boolean if a field has been set.
 
+### GetFanOut
+
+`func (o *WorkflowStep) GetFanOut() FanOut`
+
+GetFanOut returns the FanOut field if non-nil, zero value otherwise.
+
+### GetFanOutOk
+
+`func (o *WorkflowStep) GetFanOutOk() (*FanOut, bool)`
+
+GetFanOutOk returns a tuple with the FanOut field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetFanOut
+
+`func (o *WorkflowStep) SetFanOut(v FanOut)`
+
+SetFanOut sets FanOut field to given value.
+
+### HasFanOut
+
+`func (o *WorkflowStep) HasFanOut() bool`
+
+HasFanOut returns a boolean if a field has been set.
+
+### SetFanOutNil
+
+`func (o *WorkflowStep) SetFanOutNil(b bool)`
+
+ SetFanOutNil sets the value for FanOut to be an explicit nil
+
+### UnsetFanOut
+`func (o *WorkflowStep) UnsetFanOut()`
+
+UnsetFanOut ensures that no value is present for FanOut, not even an explicit nil
 ### GetMetadata
 
 `func (o *WorkflowStep) GetMetadata() map[string]interface{}`
@@ -212,6 +251,41 @@ SetPayload sets Payload field to given value.
 
 HasPayload returns a boolean if a field has been set.
 
+### GetQueue
+
+`func (o *WorkflowStep) GetQueue() string`
+
+GetQueue returns the Queue field if non-nil, zero value otherwise.
+
+### GetQueueOk
+
+`func (o *WorkflowStep) GetQueueOk() (*string, bool)`
+
+GetQueueOk returns a tuple with the Queue field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetQueue
+
+`func (o *WorkflowStep) SetQueue(v string)`
+
+SetQueue sets Queue field to given value.
+
+### HasQueue
+
+`func (o *WorkflowStep) HasQueue() bool`
+
+HasQueue returns a boolean if a field has been set.
+
+### SetQueueNil
+
+`func (o *WorkflowStep) SetQueueNil(b bool)`
+
+ SetQueueNil sets the value for Queue to be an explicit nil
+
+### UnsetQueue
+`func (o *WorkflowStep) UnsetQueue()`
+
+UnsetQueue ensures that no value is present for Queue, not even an explicit nil
 ### GetTaskName
 
 `func (o *WorkflowStep) GetTaskName() string`
@@ -231,7 +305,82 @@ and a boolean to check if the value has been set.
 
 SetTaskName sets TaskName field to given value.
 
+### HasTaskName
 
+`func (o *WorkflowStep) HasTaskName() bool`
+
+HasTaskName returns a boolean if a field has been set.
+
+### GetWhen
+
+`func (o *WorkflowStep) GetWhen() StepCondition`
+
+GetWhen returns the When field if non-nil, zero value otherwise.
+
+### GetWhenOk
+
+`func (o *WorkflowStep) GetWhenOk() (*StepCondition, bool)`
+
+GetWhenOk returns a tuple with the When field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetWhen
+
+`func (o *WorkflowStep) SetWhen(v StepCondition)`
+
+SetWhen sets When field to given value.
+
+### HasWhen
+
+`func (o *WorkflowStep) HasWhen() bool`
+
+HasWhen returns a boolean if a field has been set.
+
+### SetWhenNil
+
+`func (o *WorkflowStep) SetWhenNil(b bool)`
+
+ SetWhenNil sets the value for When to be an explicit nil
+
+### UnsetWhen
+`func (o *WorkflowStep) UnsetWhen()`
+
+UnsetWhen ensures that no value is present for When, not even an explicit nil
+### GetWorkflow
+
+`func (o *WorkflowStep) GetWorkflow() CreateWorkflowRequest`
+
+GetWorkflow returns the Workflow field if non-nil, zero value otherwise.
+
+### GetWorkflowOk
+
+`func (o *WorkflowStep) GetWorkflowOk() (*CreateWorkflowRequest, bool)`
+
+GetWorkflowOk returns a tuple with the Workflow field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetWorkflow
+
+`func (o *WorkflowStep) SetWorkflow(v CreateWorkflowRequest)`
+
+SetWorkflow sets Workflow field to given value.
+
+### HasWorkflow
+
+`func (o *WorkflowStep) HasWorkflow() bool`
+
+HasWorkflow returns a boolean if a field has been set.
+
+### SetWorkflowNil
+
+`func (o *WorkflowStep) SetWorkflowNil(b bool)`
+
+ SetWorkflowNil sets the value for Workflow to be an explicit nil
+
+### UnsetWorkflow
+`func (o *WorkflowStep) UnsetWorkflow()`
+
+UnsetWorkflow ensures that no value is present for Workflow, not even an explicit nil
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
 

@@ -10,6 +10,8 @@ Method | HTTP request | Description
 [**GetWorkflowDiagram**](WorkflowsAPI.md#GetWorkflowDiagram) | **Get** /api/v1/workflows/{id}/diagram | 
 [**GetWorkflowStepStates**](WorkflowsAPI.md#GetWorkflowStepStates) | **Get** /api/v1/workflows/{id}/steps | 
 [**ListWorkflows**](WorkflowsAPI.md#ListWorkflows) | **Get** /api/v1/workflows | 
+[**RetryWorkflow**](WorkflowsAPI.md#RetryWorkflow) | **Post** /api/v1/workflows/{id}/retry | 
+[**StreamWorkflowEvents**](WorkflowsAPI.md#StreamWorkflowEvents) | **Get** /api/v1/workflows/{id}/events | Stream a workflow&#39;s progress as Server-Sent Events: one &#x60;status&#x60; event whenever the workflow or any step changes, until the workflow is terminal.
 
 
 
@@ -98,7 +100,7 @@ import (
 )
 
 func main() {
-	createWorkflowRequest := *openapiclient.NewCreateWorkflowRequest("Name_example", []openapiclient.WorkflowStep{*openapiclient.NewWorkflowStep("Name_example", "TaskName_example")}) // CreateWorkflowRequest | 
+	createWorkflowRequest := *openapiclient.NewCreateWorkflowRequest("Name_example", []openapiclient.WorkflowStep{*openapiclient.NewWorkflowStep("Name_example")}) // CreateWorkflowRequest | 
 
 	configuration := openapiclient.NewConfiguration()
 	apiClient := openapiclient.NewAPIClient(configuration)
@@ -426,6 +428,140 @@ Name | Type | Description  | Notes
 
 - **Content-Type**: Not defined
 - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## RetryWorkflow
+
+> RetryWorkflow(ctx, id).Execute()
+
+
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
+)
+
+func main() {
+	id := "id_example" // string | Workflow id
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	r, err := apiClient.WorkflowsAPI.RetryWorkflow(context.Background(), id).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `WorkflowsAPI.RetryWorkflow``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+}
+```
+
+### Path Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+**ctx** | **context.Context** | context for authentication, logging, cancellation, deadlines, tracing, etc.
+**id** | **string** | Workflow id | 
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiRetryWorkflowRequest struct via the builder pattern
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+
+
+### Return type
+
+ (empty response body)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
+[[Back to Model list]](../README.md#documentation-for-models)
+[[Back to README]](../README.md)
+
+
+## StreamWorkflowEvents
+
+> WorkflowEvent StreamWorkflowEvents(ctx, id).Execute()
+
+Stream a workflow's progress as Server-Sent Events: one `status` event whenever the workflow or any step changes, until the workflow is terminal.
+
+### Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	openapiclient "github.com/elision-labs/queueflow-sdk-go"
+)
+
+func main() {
+	id := "id_example" // string | Workflow id
+
+	configuration := openapiclient.NewConfiguration()
+	apiClient := openapiclient.NewAPIClient(configuration)
+	resp, r, err := apiClient.WorkflowsAPI.StreamWorkflowEvents(context.Background(), id).Execute()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error when calling `WorkflowsAPI.StreamWorkflowEvents``: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	}
+	// response from `StreamWorkflowEvents`: WorkflowEvent
+	fmt.Fprintf(os.Stdout, "Response from `WorkflowsAPI.StreamWorkflowEvents`: %v\n", resp)
+}
+```
+
+### Path Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+**ctx** | **context.Context** | context for authentication, logging, cancellation, deadlines, tracing, etc.
+**id** | **string** | Workflow id | 
+
+### Other Parameters
+
+Other parameters are passed through a pointer to a apiStreamWorkflowEventsRequest struct via the builder pattern
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+
+
+### Return type
+
+[**WorkflowEvent**](WorkflowEvent.md)
+
+### Authorization
+
+[bearerAuth](../README.md#bearerAuth)
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: text/event-stream, application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints)
 [[Back to Model list]](../README.md#documentation-for-models)

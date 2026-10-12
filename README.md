@@ -5,8 +5,9 @@ workflow engine.
 
 - **Typed end-to-end**: request/response models mirror the server's OpenAPI 3.1 spec.
 - **Ergonomic**: one method per endpoint on `QueueFlow`, including bulk `CancelJobs` and
-  `ReplayDeadLetters`, `PauseQueue`/`ResumeQueue` and `WhoAmI`; `WaitForJob`/`WaitForWorkflow`
-  pollers; and a workflow builder with local DAG validation.
+  `ReplayDeadLetters`, `PauseQueue`/`ResumeQueue`, `WhoAmI` and `RetryWorkflow`;
+  `WaitForJob`/`WaitForWorkflow` pollers; and a workflow builder with local DAG validation,
+  per-step queues, conditions, fan-out and inline sub-workflows.
 - **Worker runtime**: `Run` leases jobs, runs your handlers concurrently, heartbeats them, and
   reports outcomes, with the server's retry policy and dead-letter queue doing the rest.
 - **Typed errors**: every non-2xx response is an `*APIError` carrying the status and body.
@@ -136,9 +137,10 @@ for {
 | Method | Description |
 | --- | --- |
 | `CreateWorkflow(ctx, *WorkflowBuilder) (string, error)` | Validate the DAG locally, create it, return the workflow id. |
-| `GetWorkflow(ctx, id)` / `ListWorkflows(ctx, ListOptions)` / `CancelWorkflow(ctx, id)` | Fetch / list / cancel. |
+| `GetWorkflow(ctx, id)` / `ListWorkflows(ctx, ListOptions)` / `CancelWorkflow(ctx, id)` | Fetch / list / cancel. The record carries `ErrorMessage`, `TimeoutSecs`, `DeadlineAt`, `RetryCount`, `ParentWorkflowId` and `ParentStepName`. |
+| `RetryWorkflow(ctx, id) error` | Re-run a `failed`, `partially_failed` or `cancelled` workflow from where it stopped: steps that did not complete go back to pending, completed and condition-skipped steps keep their results, `RetryCount` increments and the deadline is re-armed. A running or completed workflow is a 409. |
 | `WorkflowDiagram(ctx, id) (*WorkflowDiagramResponse, error)` | Mermaid (`graph TD`) diagram of the DAG. |
-| `WorkflowSteps(ctx, id) ([]WorkflowStepState, error)` | Runtime status of every step, with the job id executing it. |
+| `WorkflowSteps(ctx, id) ([]WorkflowStepState, error)` | Live state of every step: `Status`, `JobId`, `Error` (`condition not met` for a false `When`), `StartedAt`, `CompletedAt`, `ChildWorkflowId` for a sub-workflow step and `FanOut` progress (`Total`, `Completed`, `Failed`). |
 | `WaitForWorkflow(ctx, id, WaitOptions) (*Workflow, error)` | Poll until a terminal workflow state. |
 
 ### Workflow builder
@@ -158,9 +160,60 @@ body, err := dag.Build() // duplicate names, dangling deps and cycles fail here,
 ```
 
 `Step(name, task string, after ...string)` adds a step gated on the named `after` steps;
-`StepWithOptions` adds `Payload`, `Config`, `OnFailure`, `OnSuccess` and `Metadata`.
-`Context` and `Metadata` seed the workflow-level fields. `CreateWorkflow` calls `Build()` for
-you.
+`StepWithOptions` adds `Payload`, `Config`, `Queue`, `When`, `FanOut`, `OnFailure`, `OnSuccess`
+and `Metadata`. `Context` and `Metadata` seed the workflow-level fields; `Timeout(secs)` is the
+whole-workflow deadline. `CreateWorkflow` calls `Build()` for you.
+
+Conditions, fan-out and sub-workflows (server 0.6.0 or newer):
+
+```go
+fulfilment := queueflow.NewWorkflowBuilder("fulfilment").
+	StepWithOptions("pick", "pick_items", queueflow.StepOptions{Queue: "warehouse"}).
+	StepWithOptions("pack", "pack_parcel", queueflow.StepOptions{Queue: "warehouse", After: []string{"pick"}}).
+	Timeout(1800)
+
+dag := queueflow.NewWorkflowBuilder("order_123").
+	StepWithOptions("fetch", "fetch_images", queueflow.StepOptions{Queue: "io"}).
+	// One resize_image job per element of fetch.images, each with the element
+	// under "image" and its position under "_index"; the step's result is
+	// {"results": [...]} in element order.
+	StepWithOptions("resize", "resize_image", queueflow.StepOptions{
+		After:  []string{"fetch"},
+		FanOut: &queueflow.FanOut{Path: "fetch.images", ItemKey: *queueflow.NewNullableString(queueflow.PtrString("image"))},
+	}).
+	// Skipped (with the reason "condition not met") unless fetch.flags equals
+	// {"manual": true}; its dependents run either way.
+	StepWithOptions("review", "queue_for_review", queueflow.StepOptions{
+		After: []string{"fetch"},
+		When: queueflow.WhenAll(
+			queueflow.WhenExists("fetch.flags"),
+			queueflow.When("fetch.flags", queueflow.CONDITIONOP_EQ, map[string]interface{}{"manual": true}),
+		),
+	}).
+	// An inline child workflow: it runs with ParentWorkflowId/ParentStepName
+	// set, sees this workflow's context under _context._parent, and its final
+	// context becomes the step's result (fulfil.pack downstream).
+	SubWorkflow("fulfil", fulfilment, queueflow.StepOptions{
+		After:   []string{"resize", "review"},
+		Payload: map[string]interface{}{"warehouse": "eu-1"},
+	}).
+	Timeout(3600)
+```
+
+`When(path, op, value)`, `WhenExists(path)`, `WhenAll(...)`, `WhenAny(...)` and `WhenNot(c)` build
+a `*StepCondition`; `op` is one of the `CONDITIONOP_*` constants (`eq`, `ne`, `gt`, `gte`, `lt`,
+`lte`, `exists`, `contains`, `in`), and an empty `op` lets the server default to `eq` with a
+value or `exists` without one. `Build()` additionally rejects a step with neither a task nor a
+sub-workflow, a step with both a fan-out and a sub-workflow, a fan-out without a path, a
+condition without exactly one of `path`/`all`/`any`/`not`, a non-positive timeout, and any invalid
+inline child (errors name the step).
+
+Limitation: the server's spec declares the condition `value` as a JSON object, so the generated
+`StepCondition.Value` is a `map[string]interface{}` and this release can only compare against
+objects or test existence. A workflow whose condition carries a scalar or array value cannot be
+built through the builder, and `GetWorkflow`/`ListWorkflows` fail to decode one created elsewhere
+(`cannot unmarshal number into ... StepCondition.value`). This clears up once the spec entry is
+widened in queueflow-core and the SDK is regenerated.
 
 ### Worker
 
@@ -332,11 +385,13 @@ otherwise). `WaitForJob` and `WaitForWorkflow` wrap `queueflow.ErrTimeout` past 
 request is made. Return `queueflow.NonRetryable(err)` from a worker handler to dead-letter the
 job immediately.
 
-## Known limitation: `StreamJobEvents`
+## Known limitation: `StreamJobEvents` and `StreamWorkflowEvents`
 
-`JobsAPI.StreamJobEvents` cannot consume the server's SSE stream: it buffers the whole response
-until the stream closes (terminal status or the 15-minute cap) and returns it as one string. Use
-`WaitForJob` (polling) instead, or a hand-rolled SSE consumer over `GET /api/v1/jobs/{id}/events`.
+`JobsAPI.StreamJobEvents` and `WorkflowsAPI.StreamWorkflowEvents` cannot consume the server's SSE
+streams: the generated client buffers the whole response until the stream closes (terminal status
+or the 15-minute cap) and then tries to decode it as a single JSON document. Use `WaitForJob` and
+`WaitForWorkflow` (polling) instead, or a hand-rolled SSE consumer over
+`GET /api/v1/jobs/{id}/events` and `GET /api/v1/workflows/{id}/events`.
 
 ## Conformance tests
 
@@ -347,8 +402,12 @@ workflow, exercises the cron, dead-letter, queue backlog, stats and `WhoAmI` end
 `Run` against a dedicated queue: one scenario completes a job with a handler only the test knows,
 another dead-letters a job with `NonRetryable` and replays it. Bulk `CancelJobs`,
 `ReplayDeadLetters` and `PauseQueue`/`ResumeQueue` each get a scenario on a queue unique to the
-run, so the suite is safe against a shared server. The tests skip themselves unless
-`QUEUEFLOW_URL` is set, so plain `go test ./...` and CI stay offline.
+run, so the suite is safe against a shared server. Four scenarios cover the 0.6.0 workflow
+features, each on its own `go-live-<id>` queue served by its own `Run` worker: a condition-skipped
+step whose dependents still run (plus the workflow timeout), a fan-out with ordered results and
+progress counts, a sub-workflow linked to its parent both ways, and a halt failure retried with
+`RetryWorkflow`. The tests skip themselves unless `QUEUEFLOW_URL` is set, so plain `go test ./...`
+and CI stay offline.
 
 ```bash
 QUEUEFLOW_URL=http://localhost:8000 \

@@ -8,6 +8,7 @@ Name | Type | Description | Notes
 **Metadata** | Pointer to **map[string]interface{}** |  | [optional] 
 **Name** | **string** |  | 
 **Steps** | [**[]WorkflowStep**](WorkflowStep.md) |  | 
+**TimeoutSecs** | Pointer to **NullableInt64** | Whole-workflow time budget in seconds. When it runs out the janitor cancels every unfinished step and fails the workflow with &#x60;workflow timed out&#x60;. Unset means no limit. | [optional] 
 
 ## Methods
 
@@ -118,6 +119,41 @@ and a boolean to check if the value has been set.
 SetSteps sets Steps field to given value.
 
 
+### GetTimeoutSecs
+
+`func (o *CreateWorkflowRequest) GetTimeoutSecs() int64`
+
+GetTimeoutSecs returns the TimeoutSecs field if non-nil, zero value otherwise.
+
+### GetTimeoutSecsOk
+
+`func (o *CreateWorkflowRequest) GetTimeoutSecsOk() (*int64, bool)`
+
+GetTimeoutSecsOk returns a tuple with the TimeoutSecs field if it's non-nil, zero value otherwise
+and a boolean to check if the value has been set.
+
+### SetTimeoutSecs
+
+`func (o *CreateWorkflowRequest) SetTimeoutSecs(v int64)`
+
+SetTimeoutSecs sets TimeoutSecs field to given value.
+
+### HasTimeoutSecs
+
+`func (o *CreateWorkflowRequest) HasTimeoutSecs() bool`
+
+HasTimeoutSecs returns a boolean if a field has been set.
+
+### SetTimeoutSecsNil
+
+`func (o *CreateWorkflowRequest) SetTimeoutSecsNil(b bool)`
+
+ SetTimeoutSecsNil sets the value for TimeoutSecs to be an explicit nil
+
+### UnsetTimeoutSecs
+`func (o *CreateWorkflowRequest) UnsetTimeoutSecs()`
+
+UnsetTimeoutSecs ensures that no value is present for TimeoutSecs, not even an explicit nil
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
 

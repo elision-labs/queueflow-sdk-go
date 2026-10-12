@@ -237,6 +237,204 @@ func TestWorkflowBuilderStepOptionsAndContext(t *testing.T) {
 	}
 }
 
+// The 0.6.0 step fields (queue, when, fan_out, an inline sub-workflow) and the
+// workflow-level timeout_secs must all reach the wire in the server's shape,
+// and a sub-workflow step must carry no task_name.
+func TestWorkflowBuilderSerializesWorkflowsV2Fields(t *testing.T) {
+	child := NewWorkflowBuilder("fulfilment").
+		StepWithOptions("pick", "pick_items", StepOptions{Queue: "warehouse"}).
+		Step("pack", "pack_parcel", "pick").
+		Timeout(1800)
+	body, err := NewWorkflowBuilder("order").
+		StepWithOptions("fetch", "fetch_images", StepOptions{Queue: "io"}).
+		StepWithOptions("resize", "resize_image", StepOptions{
+			After:  []string{"fetch"},
+			FanOut: &FanOut{Path: "fetch.images", ItemKey: *NewNullableString(PtrString("image")), MaxItems: *NewNullableInt32(PtrInt32(50))},
+		}).
+		StepWithOptions("review", "queue_for_review", StepOptions{
+			After: []string{"fetch"},
+			When: WhenAny(
+				When("fetch.flags", CONDITIONOP_EQ, map[string]interface{}{"manual": true}),
+				WhenAll(WhenExists("fetch.total"), WhenNot(When("customer.trusted", "", map[string]interface{}{"level": "gold"}))),
+			),
+		}).
+		SubWorkflow("fulfil", child, StepOptions{After: []string{"resize"}, Payload: map[string]interface{}{"warehouse": "eu-1"}, OnFailure: ONFAILURE_SKIP}).
+		Timeout(3600).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["timeout_secs"] != float64(3600) {
+		t.Errorf("timeout_secs = %v, want 3600", got["timeout_secs"])
+	}
+	steps := got["steps"].([]any)
+	if len(steps) != 4 {
+		t.Fatalf("steps = %d, want 4", len(steps))
+	}
+	fetch := steps[0].(map[string]any)
+	if fetch["queue"] != "io" || fetch["task_name"] != "fetch_images" {
+		t.Errorf("fetch = %v", fetch)
+	}
+	for _, absent := range []string{"when", "fan_out", "workflow"} {
+		if _, present := fetch[absent]; present {
+			t.Errorf("fetch.%s should be omitted when unset, got %v", absent, fetch[absent])
+		}
+	}
+	resize := steps[1].(map[string]any)
+	fanOut := resize["fan_out"].(map[string]any)
+	if fanOut["path"] != "fetch.images" || fanOut["item_key"] != "image" || fanOut["max_items"] != float64(50) {
+		t.Errorf("resize.fan_out = %v", fanOut)
+	}
+	review := steps[2].(map[string]any)
+	anyOf := review["when"].(map[string]any)["any"].([]any)
+	if len(anyOf) != 2 {
+		t.Fatalf("review.when.any = %v, want two members", anyOf)
+	}
+	leaf := anyOf[0].(map[string]any)
+	if leaf["path"] != "fetch.flags" || leaf["op"] != "eq" || leaf["value"].(map[string]any)["manual"] != true {
+		t.Errorf("review.when.any[0] = %v", leaf)
+	}
+	all := anyOf[1].(map[string]any)["all"].([]any)
+	exists := all[0].(map[string]any)
+	if exists["path"] != "fetch.total" || exists["op"] != "exists" {
+		t.Errorf("exists leaf = %v", exists)
+	}
+	if _, present := exists["value"]; present {
+		t.Errorf("exists leaf should carry no value, got %v", exists["value"])
+	}
+	not := all[1].(map[string]any)["not"].(map[string]any)
+	if not["path"] != "customer.trusted" || not["value"].(map[string]any)["level"] != "gold" {
+		t.Errorf("not leaf = %v", not)
+	}
+	if _, present := not["op"]; present {
+		t.Errorf("an empty op must be omitted so the server applies its default, got %v", not["op"])
+	}
+	fulfil := steps[3].(map[string]any)
+	if _, present := fulfil["task_name"]; present {
+		t.Errorf("a sub-workflow step must not send task_name, got %v", fulfil["task_name"])
+	}
+	if fulfil["on_failure"] != "skip" || fulfil["payload"].(map[string]any)["warehouse"] != "eu-1" {
+		t.Errorf("fulfil = %v", fulfil)
+	}
+	if deps := fulfil["depends_on"].([]any); len(deps) != 1 || deps[0] != "resize" {
+		t.Errorf("fulfil.depends_on = %v", deps)
+	}
+	inner := fulfil["workflow"].(map[string]any)
+	if inner["name"] != "fulfilment" || inner["timeout_secs"] != float64(1800) {
+		t.Errorf("fulfil.workflow = %v", inner)
+	}
+	innerSteps := inner["steps"].([]any)
+	if len(innerSteps) != 2 || innerSteps[0].(map[string]any)["queue"] != "warehouse" {
+		t.Errorf("fulfil.workflow.steps = %v", innerSteps)
+	}
+	// Build must not mutate the builder: a second Build yields the same body.
+	again, err := body.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(raw) {
+		t.Errorf("second marshal differs from the first")
+	}
+}
+
+// Every 0.6.0 shape the server would reject with a 400 that the builder can
+// detect structurally must fail locally, naming the step.
+func TestWorkflowBuilderRejectsInvalidWorkflowsV2Shapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func() *WorkflowBuilder
+		wantErr string
+	}{
+		{
+			name:    "no task and no sub-workflow",
+			build:   func() *WorkflowBuilder { return NewWorkflowBuilder("etl").Step("a", "") },
+			wantErr: `step "a" needs a task or a sub-workflow`,
+		},
+		{
+			name: "fan-out and sub-workflow on one step",
+			build: func() *WorkflowBuilder {
+				return NewWorkflowBuilder("etl").SubWorkflow("a", NewWorkflowBuilder("c").Step("x", "t"), StepOptions{FanOut: &FanOut{Path: "items"}})
+			},
+			wantErr: `step "a" cannot both fan out and run a sub-workflow`,
+		},
+		{
+			name: "fan-out without a path",
+			build: func() *WorkflowBuilder {
+				return NewWorkflowBuilder("etl").StepWithOptions("a", "t", StepOptions{FanOut: &FanOut{}})
+			},
+			wantErr: `step "a": fan_out needs a path`,
+		},
+		{
+			name:    "zero timeout",
+			build:   func() *WorkflowBuilder { return NewWorkflowBuilder("etl").Step("a", "t").Timeout(0) },
+			wantErr: "timeout must be positive",
+		},
+		{
+			name:    "nil sub-workflow",
+			build:   func() *WorkflowBuilder { return NewWorkflowBuilder("etl").SubWorkflow("a", nil, StepOptions{}) },
+			wantErr: `step "a": sub-workflow is nil`,
+		},
+		{
+			name: "cyclic sub-workflow",
+			build: func() *WorkflowBuilder {
+				child := NewWorkflowBuilder("c").Step("x", "t", "y").Step("y", "t", "x")
+				return NewWorkflowBuilder("etl").SubWorkflow("a", child, StepOptions{})
+			},
+			wantErr: `step "a": sub-workflow: dependency cycle`,
+		},
+		{
+			name: "condition without a selector",
+			build: func() *WorkflowBuilder {
+				return NewWorkflowBuilder("etl").StepWithOptions("a", "t", StepOptions{When: NewStepCondition()})
+			},
+			wantErr: `step "a": when: exactly one of path, all, any or not is required`,
+		},
+		{
+			name: "condition with two selectors",
+			build: func() *WorkflowBuilder {
+				c := WhenExists("x")
+				c.SetAll([]StepCondition{*WhenExists("y")})
+				return NewWorkflowBuilder("etl").StepWithOptions("a", "t", StepOptions{When: c})
+			},
+			wantErr: `step "a": when: exactly one of path, all, any or not is required`,
+		},
+		{
+			name: "empty any",
+			build: func() *WorkflowBuilder {
+				return NewWorkflowBuilder("etl").StepWithOptions("a", "t", StepOptions{When: WhenAny()})
+			},
+			wantErr: `step "a": when: any needs at least one condition`,
+		},
+		{
+			name: "malformed nested condition",
+			build: func() *WorkflowBuilder {
+				return NewWorkflowBuilder("etl").StepWithOptions("a", "t", StepOptions{When: WhenAll(WhenExists("x"), WhenNot(NewStepCondition()))})
+			},
+			wantErr: `step "a": when: all[1]: not: exactly one of path, all, any or not is required`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := tc.build().Build()
+			if err == nil {
+				t.Fatalf("expected an error, got a request body: %+v", body)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // --- Client construction ---------------------------------------------------
 
 func TestNewQueueFlowWithOptionsValidates(t *testing.T) {
@@ -937,6 +1135,142 @@ func TestWorkflowStepsUnwrapsTheEnvelope(t *testing.T) {
 	}
 	if len(steps) != 2 || steps[0].Status != STEPSTATUS_COMPLETED || steps[1].Name != "b" {
 		t.Errorf("steps = %+v", steps)
+	}
+}
+
+// The step state view gained error, timings, child workflow and fan-out
+// progress in 0.6.0; all of them must decode through the facade accessor.
+func TestWorkflowStepsDecodesWorkflowsV2Fields(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workflows/wf-1/steps" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"steps":[
+			{"name":"gate","status":"skipped","error":"condition not met","started_at":"2026-01-01T00:00:01Z","completed_at":"2026-01-01T00:00:01Z"},
+			{"name":"resize","status":"running","job_id":"job-1","started_at":"2026-01-01T00:00:02Z","fan_out":{"total":3,"completed":1,"failed":0}},
+			{"name":"fulfil","status":"completed","child_workflow_id":"wf-child","started_at":"2026-01-01T00:00:03Z","completed_at":"2026-01-01T00:00:09Z"}
+		]}`)
+	})
+	steps, err := qf.WorkflowSteps(context.Background(), "wf-1")
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	if len(steps) != 3 {
+		t.Fatalf("steps = %d, want 3", len(steps))
+	}
+	gate := steps[0]
+	if gate.Status != STEPSTATUS_SKIPPED || gate.Error.Get() == nil || *gate.Error.Get() != "condition not met" {
+		t.Errorf("gate = %+v", gate)
+	}
+	if gate.StartedAt.Get() == nil || gate.CompletedAt.Get() == nil {
+		t.Errorf("gate timings missing: %+v", gate)
+	}
+	resize := steps[1]
+	fo := resize.FanOut.Get()
+	if fo == nil || fo.Total != 3 || fo.Completed != 1 || fo.Failed != 0 {
+		t.Errorf("resize.fan_out = %+v", fo)
+	}
+	if resize.CompletedAt.Get() != nil {
+		t.Errorf("a running step must have no completed_at, got %v", resize.CompletedAt.Get())
+	}
+	fulfil := steps[2]
+	if fulfil.ChildWorkflowId.Get() == nil || *fulfil.ChildWorkflowId.Get() != "wf-child" {
+		t.Errorf("fulfil.child_workflow_id = %v", fulfil.ChildWorkflowId.Get())
+	}
+	if fulfil.FanOut.IsSet() && fulfil.FanOut.Get() != nil {
+		t.Errorf("a sub-workflow step must have no fan_out, got %+v", fulfil.FanOut.Get())
+	}
+}
+
+// The workflow record gained error_message, timeout_secs, deadline_at,
+// retry_count and parent linkage in 0.6.0.
+func TestGetWorkflowDecodesWorkflowsV2Fields(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id":"wf-child","name":"fulfilment","status":"failed",
+			"steps":[{"name":"pick","queue":"warehouse","when":{"path":"_parent.charge","op":"exists"},"fan_out":{"path":"_parent.items"}},{"name":"pack","workflow":{"name":"inner","steps":[{"name":"x","task_name":"t"}]}}],
+			"created_at":"2026-01-01T00:00:00Z",
+			"error_message":"step 'pick': boom",
+			"timeout_secs":1800,"deadline_at":"2026-01-01T00:30:00Z",
+			"retry_count":2,
+			"parent_workflow_id":"wf-1","parent_step_name":"fulfil"
+		}`)
+	})
+	wf, err := qf.GetWorkflow(context.Background(), "wf-child")
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	if msg := wf.ErrorMessage.Get(); msg == nil || *msg != "step 'pick': boom" {
+		t.Errorf("error_message = %v", msg)
+	}
+	if secs := wf.TimeoutSecs.Get(); secs == nil || *secs != 1800 {
+		t.Errorf("timeout_secs = %v", secs)
+	}
+	if wf.DeadlineAt.Get() == nil {
+		t.Error("deadline_at missing")
+	}
+	if wf.RetryCount == nil || *wf.RetryCount != 2 {
+		t.Errorf("retry_count = %v", wf.RetryCount)
+	}
+	if p := wf.ParentWorkflowId.Get(); p == nil || *p != "wf-1" {
+		t.Errorf("parent_workflow_id = %v", p)
+	}
+	if p := wf.ParentStepName.Get(); p == nil || *p != "fulfil" {
+		t.Errorf("parent_step_name = %v", p)
+	}
+	pick := wf.Steps[0]
+	if q := pick.Queue.Get(); q == nil || *q != "warehouse" {
+		t.Errorf("pick.queue = %v", q)
+	}
+	if c := pick.When.Get(); c == nil || c.Path.Get() == nil || *c.Path.Get() != "_parent.charge" || c.Op.Get() == nil || *c.Op.Get() != CONDITIONOP_EXISTS {
+		t.Errorf("pick.when = %+v", c)
+	}
+	if f := pick.FanOut.Get(); f == nil || f.Path != "_parent.items" {
+		t.Errorf("pick.fan_out = %+v", f)
+	}
+	pack := wf.Steps[1]
+	if pack.TaskName != nil {
+		t.Errorf("pack.task_name = %v, want absent for a sub-workflow step", *pack.TaskName)
+	}
+	if inner := pack.Workflow.Get(); inner == nil || inner.Name != "inner" || len(inner.Steps) != 1 {
+		t.Errorf("pack.workflow = %+v", inner)
+	}
+}
+
+func TestRetryWorkflowPostsToTheRetryPath(t *testing.T) {
+	var seen string
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := qf.RetryWorkflow(context.Background(), "wf-1"); err != nil {
+		t.Fatalf("RetryWorkflow: %v", err)
+	}
+	if seen != "POST /api/v1/workflows/wf-1/retry" {
+		t.Errorf("request = %q", seen)
+	}
+}
+
+// A retry of a running or completed workflow is a 409 that must surface as an
+// *APIError naming the operation, so callers can branch on the status.
+func TestRetryWorkflowConflictIsAnAPIError(t *testing.T) {
+	qf := newTestQueueFlow(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"workflow is running"}`)
+	})
+	err := qf.RetryWorkflow(context.Background(), "wf-1")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected an *APIError, got %T %v", err, err)
+	}
+	if apiErr.Op != "RetryWorkflow" || apiErr.Status != http.StatusConflict || !strings.Contains(string(apiErr.Body), "running") {
+		t.Errorf("APIError = %+v", apiErr)
+	}
+	if StatusCode(err) != 409 {
+		t.Errorf("StatusCode = %d, want 409", StatusCode(err))
 	}
 }
 

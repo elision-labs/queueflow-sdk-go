@@ -13,6 +13,7 @@ docs/BackoffStrategy.md
 docs/CancelJobsRequest.md
 docs/CancelJobsResponse.md
 docs/CompleteJobRequest.md
+docs/ConditionOp.md
 docs/CreateBatchJobsRequest.md
 docs/CreateBatchJobsResponse.md
 docs/CreateCronRequest.md
@@ -27,6 +28,8 @@ docs/DeadLetter.md
 docs/DlqAPI.md
 docs/ErrorBody.md
 docs/FailJobRequest.md
+docs/FanOut.md
+docs/FanOutProgress.md
 docs/HealthAPI.md
 docs/HealthStatus.md
 docs/HeartbeatRequest.md
@@ -54,6 +57,7 @@ docs/ReplayDeadLettersRequest.md
 docs/ReplayDeadLettersResponse.md
 docs/ReplayedDeadLetter.md
 docs/StatsSnapshot.md
+docs/StepCondition.md
 docs/StepStatus.md
 docs/SystemAPI.md
 docs/TasksResponse.md
@@ -61,6 +65,7 @@ docs/WhoAmIResponse.md
 docs/WorkerAPI.md
 docs/Workflow.md
 docs/WorkflowDiagramResponse.md
+docs/WorkflowEvent.md
 docs/WorkflowStatus.md
 docs/WorkflowStep.md
 docs/WorkflowStepState.md
@@ -73,6 +78,7 @@ model_backoff_strategy.go
 model_cancel_jobs_request.go
 model_cancel_jobs_response.go
 model_complete_job_request.go
+model_condition_op.go
 model_create_batch_jobs_request.go
 model_create_batch_jobs_response.go
 model_create_cron_request.go
@@ -85,6 +91,8 @@ model_cron_schedule.go
 model_dead_letter.go
 model_error_body.go
 model_fail_job_request.go
+model_fan_out.go
+model_fan_out_progress.go
 model_health_status.go
 model_heartbeat_request.go
 model_heartbeat_response.go
@@ -110,11 +118,13 @@ model_replay_dead_letters_request.go
 model_replay_dead_letters_response.go
 model_replayed_dead_letter.go
 model_stats_snapshot.go
+model_step_condition.go
 model_step_status.go
 model_tasks_response.go
 model_who_am_i_response.go
 model_workflow.go
 model_workflow_diagram_response.go
+model_workflow_event.go
 model_workflow_status.go
 model_workflow_step.go
 model_workflow_step_state.go

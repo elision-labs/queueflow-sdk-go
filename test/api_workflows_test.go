@@ -101,4 +101,31 @@ func Test_queueflow_WorkflowsAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test WorkflowsAPIService RetryWorkflow", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var id string
+
+		httpRes, err := apiClient.WorkflowsAPI.RetryWorkflow(context.Background(), id).Execute()
+
+		require.Nil(t, err)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
+	t.Run("Test WorkflowsAPIService StreamWorkflowEvents", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var id string
+
+		resp, httpRes, err := apiClient.WorkflowsAPI.StreamWorkflowEvents(context.Background(), id).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 }

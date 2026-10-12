@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -731,5 +732,433 @@ func TestLivePauseAndResumeQueueGateLeases(t *testing.T) {
 	}
 	if done.Status != JOBSTATUS_COMPLETED {
 		t.Fatalf("status = %q, want completed", done.Status)
+	}
+}
+
+// --- Workflows v2 (server 0.6.0) -------------------------------------------
+//
+// Each scenario puts every step on a queue unique to the run (the step-level
+// Queue field) and serves it with its own Run worker, so the suite is safe
+// against a shared server and never depends on the built-in handlers.
+
+// liveWorker serves queue with handlers in the background until the returned
+// stop function is called; stop waits for Run to return and reports its error.
+func liveWorker(t *testing.T, qf *QueueFlow, queue string, handlers map[string]Handler) func() {
+	t.Helper()
+	workerCtx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		errc <- qf.Run(workerCtx, queue, handlers, WorkerOptions{Concurrency: 3, LeaseSecs: 10, WaitSecs: 2, Logf: t.Logf})
+	}()
+	return func() {
+		cancel()
+		if err := <-errc; err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	}
+}
+
+// stepState finds the named step in a WorkflowSteps result.
+func stepState(t *testing.T, states []WorkflowStepState, name string) WorkflowStepState {
+	t.Helper()
+	for _, s := range states {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("step %q missing from %+v", name, states)
+	return WorkflowStepState{}
+}
+
+func nullableString(s NullableString) string {
+	if v := s.Get(); v != nil {
+		return *v
+	}
+	return ""
+}
+
+// stepContext returns the _context a step's job was enqueued with.
+func stepContext(t *testing.T, qf *QueueFlow, state WorkflowStepState) map[string]interface{} {
+	t.Helper()
+	jobID := nullableString(state.JobId)
+	if jobID == "" {
+		t.Fatalf("step %q has no job id: %+v", state.Name, state)
+	}
+	job, err := qf.GetJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("GetJob(%s): %v", jobID, err)
+	}
+	ctx, _ := job.Payload["_context"].(map[string]interface{})
+	if ctx == nil {
+		t.Fatalf("job %s payload has no _context: %v", jobID, job.Payload)
+	}
+	return ctx
+}
+
+// A step whose When is false is skipped with "condition not met" and, unlike a
+// policy skip, still satisfies its dependents: `last` runs with the result of
+// the taken branch and no entry for the skipped one in its _context. The
+// workflow-level Timeout is stored and armed.
+func TestLiveConditionSkippedStepSatisfiesDependents(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-" + suffix
+	produce, noop := "go-live-produce-"+suffix, "go-live-noop-"+suffix
+
+	stop := liveWorker(t, qf, queue, map[string]Handler{
+		produce: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"flag": map[string]interface{}{"manual": true}}, nil
+		},
+		noop: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+	})
+	defer stop()
+
+	dag := NewWorkflowBuilder("go-live-when-"+suffix).
+		StepWithOptions("produce", produce, StepOptions{Queue: queue}).
+		StepWithOptions("skipped", noop, StepOptions{Queue: queue, After: []string{"produce"}, When: WhenExists("produce.missing")}).
+		StepWithOptions("taken", noop, StepOptions{Queue: queue, After: []string{"produce"}, When: WhenAll(
+			WhenExists("produce.flag"),
+			When("produce.flag", CONDITIONOP_EQ, map[string]interface{}{"manual": true}),
+			WhenNot(WhenExists("produce.missing")),
+		)}).
+		StepWithOptions("last", noop, StepOptions{Queue: queue, After: []string{"skipped", "taken"}}).
+		Timeout(600)
+	id, err := qf.CreateWorkflow(ctx, dag)
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	finished, err := qf.WaitForWorkflow(ctx, id, liveWait)
+	if err != nil {
+		t.Fatalf("WaitForWorkflow: %v", err)
+	}
+	if finished.Status != WORKFLOWSTATUS_COMPLETED {
+		t.Fatalf("status = %q (error %q), want completed", finished.Status, nullableString(finished.ErrorMessage))
+	}
+	if secs := finished.TimeoutSecs.Get(); secs == nil || *secs != 600 {
+		t.Errorf("timeout_secs = %v, want 600", secs)
+	}
+	if finished.DeadlineAt.Get() == nil {
+		t.Error("deadline_at not set for a workflow with a timeout")
+	}
+
+	states, err := qf.WorkflowSteps(ctx, id)
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	skipped := stepState(t, states, "skipped")
+	if skipped.Status != STEPSTATUS_SKIPPED || nullableString(skipped.Error) != "condition not met" {
+		t.Fatalf("skipped = status %q error %q, want skipped / condition not met", skipped.Status, nullableString(skipped.Error))
+	}
+	if nullableString(skipped.JobId) != "" {
+		t.Errorf("a condition-skipped step must have no job, got %s", nullableString(skipped.JobId))
+	}
+	for _, name := range []string{"produce", "taken", "last"} {
+		s := stepState(t, states, name)
+		if s.Status != STEPSTATUS_COMPLETED {
+			t.Fatalf("step %q = %q (error %q), want completed", name, s.Status, nullableString(s.Error))
+		}
+		if s.StartedAt.Get() == nil || s.CompletedAt.Get() == nil {
+			t.Errorf("step %q timings missing: %+v", name, s)
+		}
+	}
+	lastCtx := stepContext(t, qf, stepState(t, states, "last"))
+	if _, present := lastCtx["skipped"]; present {
+		t.Errorf("last._context carries the skipped step: %v", lastCtx)
+	}
+	if taken, _ := lastCtx["taken"].(map[string]interface{}); taken["ok"] != true {
+		t.Errorf("last._context.taken = %v, want the taken step's result", lastCtx["taken"])
+	}
+	if _, present := finished.Context["skipped"]; present {
+		t.Errorf("workflow context carries the skipped step: %v", finished.Context)
+	}
+}
+
+// A fan-out step runs its task once per array element, each child seeing the
+// element under item_key and its position under _index; the step's result is
+// the ordered results array, and the live state carries the counts.
+func TestLiveFanOutRunsOncePerElement(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-" + suffix
+	fetch, resize, collect := "go-live-fetch-"+suffix, "go-live-resize-"+suffix, "go-live-collect-"+suffix
+
+	stop := liveWorker(t, qf, queue, map[string]Handler{
+		fetch: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"images": []interface{}{"a", "b", "c"}}, nil
+		},
+		resize: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"image": job.Payload["image"], "index": job.Payload["_index"], "quality": job.Payload["quality"]}, nil
+		},
+		collect: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			wfCtx, _ := job.Payload["_context"].(map[string]interface{})
+			step, _ := wfCtx["resize"].(map[string]interface{})
+			results, _ := step["results"].([]interface{})
+			return map[string]interface{}{"count": len(results)}, nil
+		},
+	})
+	defer stop()
+
+	dag := NewWorkflowBuilder("go-live-fanout-"+suffix).
+		StepWithOptions("fetch", fetch, StepOptions{Queue: queue}).
+		StepWithOptions("resize", resize, StepOptions{
+			Queue:   queue,
+			After:   []string{"fetch"},
+			Payload: map[string]interface{}{"quality": 80},
+			FanOut:  &FanOut{Path: "fetch.images", ItemKey: *NewNullableString(PtrString("image"))},
+		}).
+		StepWithOptions("collect", collect, StepOptions{Queue: queue, After: []string{"resize"}})
+	id, err := qf.CreateWorkflow(ctx, dag)
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	finished, err := qf.WaitForWorkflow(ctx, id, liveWait)
+	if err != nil {
+		t.Fatalf("WaitForWorkflow: %v", err)
+	}
+	if finished.Status != WORKFLOWSTATUS_COMPLETED {
+		t.Fatalf("status = %q (error %q), want completed", finished.Status, nullableString(finished.ErrorMessage))
+	}
+
+	want := map[string]interface{}{"results": []interface{}{
+		map[string]interface{}{"image": "a", "index": 0, "quality": 80},
+		map[string]interface{}{"image": "b", "index": 1, "quality": 80},
+		map[string]interface{}{"image": "c", "index": 2, "quality": 80},
+	}}
+	if got, exp := canonical(t, finished.Context["resize"]), canonical(t, want); got != exp {
+		t.Errorf("context.resize = %s, want %s", got, exp)
+	}
+
+	states, err := qf.WorkflowSteps(ctx, id)
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	rs := stepState(t, states, "resize")
+	if rs.Status != STEPSTATUS_COMPLETED {
+		t.Fatalf("resize = %q (error %q), want completed", rs.Status, nullableString(rs.Error))
+	}
+	if fo := rs.FanOut.Get(); fo == nil || fo.Total != 3 || fo.Completed != 3 || fo.Failed != 0 {
+		t.Errorf("resize.fan_out = %+v, want total 3 completed 3 failed 0", fo)
+	}
+	if nullableString(rs.JobId) == "" {
+		t.Error("resize has no job id; expected the first child's")
+	}
+	if fo := stepState(t, states, "fetch").FanOut.Get(); fo != nil {
+		t.Errorf("fetch is not a fan-out step but reports %+v", fo)
+	}
+
+	collectJob, err := qf.GetJob(ctx, nullableString(stepState(t, states, "collect").JobId))
+	if err != nil {
+		t.Fatalf("GetJob(collect): %v", err)
+	}
+	if collectJob.Result["count"] != float64(3) {
+		t.Errorf("collect saw %v results, want 3", collectJob.Result["count"])
+	}
+
+	children, err := qf.ListJobs(ctx, ListOptions{Queue: queue, TaskName: resize, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(children.Jobs) != 3 {
+		t.Fatalf("fan-out children = %d, want 3", len(children.Jobs))
+	}
+	for _, child := range children.Jobs {
+		if child.Metadata["fan_out_total"] != float64(3) {
+			t.Errorf("child %s metadata = %v, want fan_out_total 3", child.Id, child.Metadata)
+		}
+		if wfID := nullableString(child.WorkflowId); wfID != id {
+			t.Errorf("child %s workflow_id = %q, want %q", child.Id, wfID, id)
+		}
+	}
+}
+
+// A sub-workflow step spawns a child workflow linked both ways: the parent's
+// step state names the child, the child names its parent and step, the child
+// sees the parent's context under _parent, and the child's final context
+// becomes the step's result.
+func TestLiveSubWorkflowLinksParentAndChild(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-" + suffix
+	prep, pick, pack := "go-live-prep-"+suffix, "go-live-pick-"+suffix, "go-live-pack-"+suffix
+
+	stop := liveWorker(t, qf, queue, map[string]Handler{
+		prep: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"charge_id": "ch_1"}, nil
+		},
+		pick: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			wfCtx, _ := job.Payload["_context"].(map[string]interface{})
+			parent, _ := wfCtx["_parent"].(map[string]interface{})
+			prepResult, _ := parent["prep"].(map[string]interface{})
+			return map[string]interface{}{"picked": true, "parent_charge": prepResult["charge_id"], "warehouse": wfCtx["warehouse"]}, nil
+		},
+		pack: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"packed": true}, nil
+		},
+	})
+	defer stop()
+
+	child := NewWorkflowBuilder("go-live-child-"+suffix).
+		StepWithOptions("pick", pick, StepOptions{Queue: queue}).
+		StepWithOptions("pack", pack, StepOptions{Queue: queue, After: []string{"pick"}}).
+		Context(map[string]interface{}{"region": "eu"})
+	parent := NewWorkflowBuilder("go-live-parent-"+suffix).
+		StepWithOptions("prep", prep, StepOptions{Queue: queue}).
+		SubWorkflow("fulfil", child, StepOptions{After: []string{"prep"}, Payload: map[string]interface{}{"warehouse": "eu-1"}})
+	id, err := qf.CreateWorkflow(ctx, parent)
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	finished, err := qf.WaitForWorkflow(ctx, id, liveWait)
+	if err != nil {
+		t.Fatalf("WaitForWorkflow: %v", err)
+	}
+	if finished.Status != WORKFLOWSTATUS_COMPLETED {
+		t.Fatalf("parent status = %q (error %q), want completed", finished.Status, nullableString(finished.ErrorMessage))
+	}
+	if finished.ParentWorkflowId.Get() != nil {
+		t.Errorf("the root workflow reports a parent: %v", *finished.ParentWorkflowId.Get())
+	}
+
+	states, err := qf.WorkflowSteps(ctx, id)
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	fulfil := stepState(t, states, "fulfil")
+	if fulfil.Status != STEPSTATUS_COMPLETED {
+		t.Fatalf("fulfil = %q (error %q), want completed", fulfil.Status, nullableString(fulfil.Error))
+	}
+	childID := nullableString(fulfil.ChildWorkflowId)
+	if childID == "" {
+		t.Fatalf("fulfil has no child_workflow_id: %+v", fulfil)
+	}
+
+	childWf, err := qf.GetWorkflow(ctx, childID)
+	if err != nil {
+		t.Fatalf("GetWorkflow(child): %v", err)
+	}
+	if childWf.Status != WORKFLOWSTATUS_COMPLETED {
+		t.Fatalf("child status = %q, want completed", childWf.Status)
+	}
+	if nullableString(childWf.ParentWorkflowId) != id || nullableString(childWf.ParentStepName) != "fulfil" {
+		t.Errorf("child parent linkage = %q / %q, want %q / fulfil", nullableString(childWf.ParentWorkflowId), nullableString(childWf.ParentStepName), id)
+	}
+	if childWf.Context["region"] != "eu" || childWf.Context["warehouse"] != "eu-1" {
+		t.Errorf("child context lacks its own context and the step payload: %v", childWf.Context)
+	}
+	if parentCtx, _ := childWf.Context["_parent"].(map[string]interface{}); parentCtx == nil || parentCtx["prep"] == nil {
+		t.Errorf("child context lacks _parent.prep: %v", childWf.Context)
+	}
+	picked, _ := childWf.Context["pick"].(map[string]interface{})
+	if picked["parent_charge"] != "ch_1" || picked["warehouse"] != "eu-1" {
+		t.Errorf("child.pick = %v, want parent_charge ch_1 and warehouse eu-1", picked)
+	}
+
+	// The step's result is the child's final context, so pack's result is
+	// reachable from the parent as fulfil.pack.
+	stepResult, _ := finished.Context["fulfil"].(map[string]interface{})
+	if packed, _ := stepResult["pack"].(map[string]interface{}); packed["packed"] != true {
+		t.Errorf("parent context.fulfil = %v, want the child's final context", finished.Context["fulfil"])
+	}
+}
+
+// A halt failure ends the workflow failed and cancels the rest; RetryWorkflow
+// re-runs only what did not complete, bumps retry_count and clears the error.
+// Retrying the completed workflow is then a 409.
+func TestLiveRetryResumesAFailedWorkflow(t *testing.T) {
+	qf := liveClient(t)
+	ctx := context.Background()
+	suffix := liveSuffix(t)
+	queue := "go-live-" + suffix
+	stable, flaky := "go-live-stable-"+suffix, "go-live-flaky-"+suffix
+
+	var flakyCalls int32
+	stop := liveWorker(t, qf, queue, map[string]Handler{
+		stable: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		flaky: func(ctx context.Context, job *Job) (map[string]interface{}, error) {
+			if atomic.AddInt32(&flakyCalls, 1) == 1 {
+				return nil, NonRetryable(fmt.Errorf("flaky boom"))
+			}
+			return map[string]interface{}{"recovered": true}, nil
+		},
+	})
+	defer stop()
+
+	dag := NewWorkflowBuilder("go-live-retry-"+suffix).
+		StepWithOptions("first", stable, StepOptions{Queue: queue}).
+		StepWithOptions("flaky", flaky, StepOptions{Queue: queue, After: []string{"first"}, OnFailure: ONFAILURE_HALT}).
+		StepWithOptions("final", stable, StepOptions{Queue: queue, After: []string{"flaky"}})
+	id, err := qf.CreateWorkflow(ctx, dag)
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	failed, err := qf.WaitForWorkflow(ctx, id, liveWait)
+	if err != nil {
+		t.Fatalf("WaitForWorkflow: %v", err)
+	}
+	if failed.Status != WORKFLOWSTATUS_FAILED {
+		t.Fatalf("status = %q, want failed", failed.Status)
+	}
+	if nullableString(failed.ErrorMessage) == "" {
+		t.Error("a failed workflow must carry error_message")
+	}
+	if failed.RetryCount != nil && *failed.RetryCount != 0 {
+		t.Errorf("retry_count before retry = %d, want 0", *failed.RetryCount)
+	}
+	before, err := qf.WorkflowSteps(ctx, id)
+	if err != nil {
+		t.Fatalf("WorkflowSteps: %v", err)
+	}
+	firstJob := nullableString(stepState(t, before, "first").JobId)
+	if s := stepState(t, before, "flaky"); s.Status != STEPSTATUS_FAILED || nullableString(s.Error) == "" {
+		t.Errorf("flaky = %q (error %q), want failed with an error", s.Status, nullableString(s.Error))
+	}
+	if s := stepState(t, before, "final"); s.Status != STEPSTATUS_CANCELLED {
+		t.Errorf("final = %q, want cancelled under halt", s.Status)
+	}
+
+	if err := qf.RetryWorkflow(ctx, id); err != nil {
+		t.Fatalf("RetryWorkflow: %v", err)
+	}
+	recovered, err := qf.WaitForWorkflow(ctx, id, liveWait)
+	if err != nil {
+		t.Fatalf("WaitForWorkflow after retry: %v", err)
+	}
+	if recovered.Status != WORKFLOWSTATUS_COMPLETED {
+		t.Fatalf("status after retry = %q (error %q), want completed", recovered.Status, nullableString(recovered.ErrorMessage))
+	}
+	if recovered.RetryCount == nil || *recovered.RetryCount != 1 {
+		t.Errorf("retry_count = %v, want 1", recovered.RetryCount)
+	}
+	if nullableString(recovered.ErrorMessage) != "" {
+		t.Errorf("error_message not cleared by the retry: %q", nullableString(recovered.ErrorMessage))
+	}
+	if atomic.LoadInt32(&flakyCalls) != 2 {
+		t.Errorf("flaky handler ran %d times, want 2", flakyCalls)
+	}
+	after, err := qf.WorkflowSteps(ctx, id)
+	if err != nil {
+		t.Fatalf("WorkflowSteps after retry: %v", err)
+	}
+	for _, s := range after {
+		if s.Status != STEPSTATUS_COMPLETED {
+			t.Errorf("step %q after retry = %q (error %q), want completed", s.Name, s.Status, nullableString(s.Error))
+		}
+	}
+	if got := nullableString(stepState(t, after, "first").JobId); got != firstJob {
+		t.Errorf("completed step first re-ran: job %s, was %s", got, firstJob)
+	}
+	if flakyResult, _ := recovered.Context["flaky"].(map[string]interface{}); flakyResult["recovered"] != true {
+		t.Errorf("context.flaky = %v, want the retried result", recovered.Context["flaky"])
+	}
+
+	if err := qf.RetryWorkflow(ctx, id); StatusCode(err) != 409 {
+		t.Fatalf("retry of a completed workflow: %v, want a 409 APIError", err)
 	}
 }
